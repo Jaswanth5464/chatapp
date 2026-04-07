@@ -27,12 +27,13 @@ app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/upload', uploadRoutes);
 
-// Static files for frontend
-app.use(express.static(path.join(__dirname, '../client')));
+// Static files for frontend (Served from Root)
+app.use(express.static(path.join(process.cwd(), 'client')));
 
-// Catch-all to serve index.html for any frontend routing
+// Catch-all to serve index.html for any frontend routing (MUST be below API routes)
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client', 'index.html'));
+    const indexPath = path.join(process.cwd(), 'client', 'index.html');
+    res.sendFile(indexPath);
 });
 
 // Root Endpoint for deployment health check
