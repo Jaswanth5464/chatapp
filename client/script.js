@@ -1,4 +1,6 @@
-const API_URL = '/api';
+const API_URL = window.location.origin === 'null' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? '/api' // Or specify your absolute Render URL here if you want to test local-to-remote
+    : '/api';
 let socket;
 let currentUser = null;
 let currentChat = null;
@@ -896,21 +898,21 @@ async function generateSmartReplies(msgContent) {
         });
         const data = await res.json();
         
-        if (data.suggestions && data.suggestions.length > 0) {
+        if (data.suggestions && data.suggestions.length > 0 && smartReplies) {
             smartReplies.innerHTML = '';
             data.suggestions.forEach(sug => {
                 const span = document.createElement('span');
                 span.className = 'smart-reply-chip';
                 span.innerText = sug;
                 span.addEventListener('click', () => {
-                    messageInput.value = sug;
-                    smartReplies.classList.add('d-none');
-                    messageForm.dispatchEvent(new Event('submit'));
+                    if (messageInput) messageInput.value = sug;
+                    if (smartReplies) smartReplies.classList.add('d-none');
+                    if (messageForm) messageForm.dispatchEvent(new Event('submit'));
                 });
                 smartReplies.appendChild(span);
             });
             smartReplies.classList.remove('d-none');
-        } else {
+        } else if (smartReplies) {
             smartReplies.classList.add('d-none');
         }
     } catch (err) {
@@ -920,15 +922,28 @@ async function generateSmartReplies(msgContent) {
 
 // Socket Connection
 function connectSocket() {
-    // Priority on WebSockets for faster connections on Render
-    socket = io({
-        transports: ['websocket', 'polling']
-    });
+    // Standardizing protocol for Render/Cloud environments
+    const socketOptions = {
+        transports: ['websocket', 'polling'],
+        secure: window.location.protocol === 'https:',
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 2000
+    };
+    
+    socket = io(socketOptions);
     
     socket.emit('setup', currentUser);
     
     socket.on('connected', () => {
-        console.log('Valid socket connection');
+        console.log('✅ Connected to Server');
+    });
+
+    socket.on('connect_error', (err) => {
+        console.warn('⚠️ Connection Error:', err.message);
+        if (window.location.protocol === 'file:') {
+            alert("Connection Refused: You are opening index.html as a file. Please use the Render link instead.");
+        }
     });
     
     socket.on('message recieved', (newMessageReceived) => {
@@ -1197,9 +1212,11 @@ async function handleStartCall(type) {
         ringStatus.innerText = "Starting Group Call...";
         ringAvatar.src = defaultAvatar; // Or group icon
     } else {
-        ringName.innerText = otherUser.username;
-        ringStatus.innerText = "Ringing...";
-        ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
+        if (ringName) ringName.innerText = otherUser.username;
+        if (ringStatus) ringStatus.innerText = "Ringing...";
+        if (ringAvatar) {
+            ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
+        }
     }
     
     try {
@@ -1246,12 +1263,15 @@ acceptCallBtn.addEventListener('click', async () => {
     isMuted = false;
     isVideoOff = false;
 
-    // Show Connecting UI
-    ringingUI.classList.remove('d-none');
-    ringName.innerText = incomingCallData.name;
-    ringStatus.innerText = "Connecting...";
+    // Show Connecting UI (Null-safe)
+    if (ringingUI) ringingUI.classList.remove('d-none');
+    if (ringName) ringName.innerText = incomingCallData.name;
+    if (ringStatus) ringStatus.innerText = "Connecting...";
+    
     const sender = users.find(u=>u._id === activeCallUserId);
-    ringAvatar.src = sender ? (sender.profilePic || defaultAvatar) : defaultAvatar;
+    if (ringAvatar) {
+        ringAvatar.src = sender ? (sender.profilePic || defaultAvatar) : defaultAvatar;
+    }
 
     try {
         const streamConstraints = { video: callType === 'video', audio: true };
@@ -1333,10 +1353,14 @@ function endCall(reason) {
     secondsElapsed = 0;
     clearInterval(callDurationTimer);
     
-    toggleMicBtn.classList.remove('active');
-    toggleMicBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
-    toggleVideoBtn.classList.remove('active');
-    toggleVideoBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
+    if (toggleMicBtn) {
+        toggleMicBtn.classList.remove('active');
+        toggleMicBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
+    }
+    if (toggleVideoBtn) {
+        toggleVideoBtn.classList.remove('active');
+        toggleVideoBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
+    }
 }
 
 endCallBtn.addEventListener('click', () => {
