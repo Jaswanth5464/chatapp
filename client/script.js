@@ -98,17 +98,24 @@ const voiceRecBtn = document.getElementById('voice-rec-btn');
 const recordingStatus = document.getElementById('recording-status');
 const recordingTimerUI = document.getElementById('recording-timer');
 const cancelRecordingBtn = document.getElementById('cancel-recording');
+const videoGrid = document.getElementById('video-grid');
 
 let mediaRecorder;
 let audioChunks = [];
+let peer = null; // For 1:1 calls
+
+// Audio Objects
+const outgoingRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3');
+outgoingRingtone.loop = true;
+const callRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/1351/1351-preview.mp3');
+callRingtone.loop = true;
+const callEndSound = new Audio('https://assets.mixkit.co/active_storage/sfx/1352/1352-preview.mp3');
+
+function scrollToBottom() {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
 let recordingInterval;
 let recordingSeconds = 0;
-
-const callRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3');
-const outgoingRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3');
-const callEndSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-callRingtone.loop = true;
-outgoingRingtone.loop = true;
 
 // Initialize app
 function init() {
@@ -135,6 +142,98 @@ function showChatView() {
         mainChat.classList.add('hidden-mobile');
         sidebar.classList.remove('hidden-mobile');
     }
+}
+
+// Sidebar Restoration: Show both Users and Groups
+async function fetchUsers() {
+    try {
+        const res = await fetch(`${API_URL}/auth/users`, {
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            users = data;
+            fetchChats(); // Fetch existing conversations/groups
+        }
+    } catch (err) {
+        console.error('Error fetching users:', err);
+    }
+}
+
+async function fetchChats() {
+    try {
+        const res = await fetch(`${API_URL}/chat`, {
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            renderChats(data);
+        }
+    } catch (err) {
+        console.error('Error fetching chats:', err);
+    }
+}
+
+function renderChats(chats) {
+    usersList.innerHTML = '';
+    if (!chats || chats.length === 0) {
+        usersList.innerHTML = '<div class="p-4 text-center text-muted">No conversations yet.</div>';
+        return;
+    }
+
+    chats.forEach(chat => {
+        const isGroup = chat.isGroupChat;
+        const chatTitle = isGroup ? chat.chatName : chat.users.find(u => u._id !== currentUser._id).username;
+        const otherUser = isGroup ? null : chat.users.find(u => u._id !== currentUser._id);
+        const isOnline = otherUser ? onlineUsersList.includes(otherUser._id) : false;
+        
+        let profilePicUrl = defaultAvatar;
+        if (!isGroup && otherUser && otherUser.profilePic) {
+            profilePicUrl = otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`;
+        }
+
+        const div = document.createElement('div');
+        div.className = 'user-item p-3 d-flex align-items-center position-relative animate__animated animate__fadeIn';
+        if (currentChat && currentChat._id === chat._id) div.classList.add('active');
+
+        div.innerHTML = `
+            <div class="position-relative me-3">
+                <div class="rounded-circle shadow-sm d-flex align-items-center justify-content-center ${isGroup ? 'bg-primary text-white' : ''}" style="width: 48px; height: 48px; overflow: hidden; background: #e2e8f0;">
+                    ${isGroup ? '<i class="fa-solid fa-users"></i>' : `<img src="${profilePicUrl}" style="width: 100%; height: 100%; object-fit: cover;">`}
+                </div>
+                ${!isGroup && isOnline ? '<span class="status-dot online position-absolute bottom-0 end-0 border border-white border-2"></span>' : ''}
+            </div>
+            <div class="flex-grow-1 overflow-hidden">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <h6 class="mb-0 fw-bold text-truncate">${chatTitle}</h6>
+                    <small class="text-muted" style="font-size: 0.7rem;">${chat.latestMessage ? new Date(chat.latestMessage.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</small>
+                </div>
+                <div class="text-truncate text-muted small">
+                    ${chat.latestMessage ? (chat.latestMessage.sender._id === currentUser._id ? 'You: ' : '') + chat.latestMessage.content : 'No messages yet'}
+                </div>
+            </div>
+        `;
+
+        div.onclick = () => {
+             document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
+             div.classList.add('active');
+             currentChat = chat;
+             currentChatName.innerText = chatTitle;
+             messageInput.disabled = false;
+             sendBtn.disabled = false;
+             voiceRecBtn.disabled = false;
+             
+             socket.emit('join chat', chat._id);
+             
+             // Mobile flip
+             document.body.classList.add('mobile-chat-active');
+             document.body.classList.remove('mobile-chat-hidden');
+
+             fetchMessages();
+        };
+
+        usersList.appendChild(div);
+    });
 }
 
 function showAuthView() {
@@ -239,11 +338,97 @@ async function fetchUsers() {
         const data = await res.json();
         if (res.ok) {
             users = data;
-            renderUsers();
+            // Also fetch chats to populate the sidebar with existing conversations/groups
+            fetchChats(); 
         }
     } catch (err) {
         console.error('Error fetching users:', err);
     }
+}
+
+async function fetchChats() {
+    try {
+        const res = await fetch(`${API_URL}/chat`, {
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            renderChats(data);
+        }
+    } catch (err) {
+        console.error('Error fetching chats:', err);
+    }
+}
+
+function renderChats(chats) {
+    usersList.innerHTML = '';
+    if (!chats || chats.length === 0) {
+        usersList.innerHTML = '<div class="p-4 text-center text-muted">No conversations yet.</div>';
+        return;
+    }
+
+    chats.forEach(chat => {
+        const isGroup = chat.isGroupChat;
+        const chatTitle = isGroup ? chat.chatName : chat.users.find(u => u._id !== currentUser._id).username;
+        const otherUser = isGroup ? null : chat.users.find(u => u._id !== currentUser._id);
+        const isOnline = otherUser ? onlineUsersList.includes(otherUser._id) : false;
+        
+        let profilePicUrl = defaultAvatar;
+        if (!isGroup && otherUser && otherUser.profilePic) {
+            profilePicUrl = otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`;
+        }
+
+        const div = document.createElement('div');
+        div.className = 'user-item p-3 d-flex align-items-center position-relative animate__animated animate__fadeIn';
+        if (currentChat && currentChat._id === chat._id) div.classList.add('active');
+
+        div.innerHTML = `
+            <div class="position-relative me-3">
+                <div class="rounded-circle shadow-sm d-flex align-items-center justify-content-center ${isGroup ? 'bg-primary text-white' : ''}" style="width: 48px; height: 48px; overflow: hidden; background: #e2e8f0;">
+                    ${isGroup ? '<i class="fa-solid fa-users"></i>' : `<img src="${profilePicUrl}" style="width: 100%; height: 100%; object-fit: cover;">`}
+                </div>
+                ${!isGroup && isOnline ? '<span class="status-dot online position-absolute bottom-0 end-0 border border-white border-2"></span>' : ''}
+            </div>
+            <div class="flex-grow-1 overflow-hidden">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <h6 class="mb-0 fw-bold text-truncate">${chatTitle}</h6>
+                    <small class="text-muted" style="font-size: 0.7rem;">${chat.latestMessage ? new Date(chat.latestMessage.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</small>
+                </div>
+                <div class="text-truncate text-muted small">
+                    ${chat.latestMessage ? (chat.latestMessage.sender._id === currentUser._id ? 'You: ' : '') + chat.latestMessage.content : 'No messages yet'}
+                </div>
+            </div>
+        `;
+
+        div.onclick = () => {
+             document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
+             div.classList.add('active');
+             currentChat = chat;
+             currentChatName.innerText = chatTitle;
+             messageInput.disabled = false;
+             sendBtn.disabled = false;
+             voiceRecBtn.disabled = false;
+             
+             // Video/Voice call logic
+             if (isGroup) {
+                 videoCallBtn.classList.remove('d-none');
+                 voiceCallBtn.classList.add('d-none'); // Group voice uses conference
+             } else {
+                 videoCallBtn.classList.remove('d-none');
+                 voiceCallBtn.classList.remove('d-none');
+             }
+
+             socket.emit('join chat', chat._id);
+             
+             // Mobile flip
+             document.body.classList.add('mobile-chat-active');
+             document.body.classList.remove('mobile-chat-hidden');
+
+             fetchMessages();
+        };
+
+        usersList.appendChild(div);
+    });
 }
 
 async function fetchUsersSilently() {
@@ -301,7 +486,7 @@ function renderUsers() {
             ? `<small class="text-success fw-bold">Active now</small>` 
             : `<small class="text-muted">Last seen: ${timeSince(user.lastSeen)}</small>`;
 
-        let profilePicUrl = user.profilePic || defaultAvatar;
+        let profilePicUrl = user.profilePic ? (user.profilePic.startsWith('http') ? user.profilePic : `uploads/${user.profilePic.split('/').pop()}`) : defaultAvatar;
         // Sanitize: Replace double quotes with single quotes to prevent breaking the src attribute
         if (profilePicUrl.startsWith('data:image')) {
             profilePicUrl = profilePicUrl.replace(/"/g, "'");
@@ -521,15 +706,17 @@ function appendMessageUI(msg) {
     if (msg.mediaUrl && !isDeleted) {
         if (msg.mediaUrl.endsWith('.webm') || msg.mediaUrl.includes('audio')) {
             // It's a voice note
+            const audioSrc = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `uploads/${msg.mediaUrl.split('/').pop()}`;
             mediaHtml = `
                 <div class="voice-note-container p-2 mb-2 rounded bg-light border border-primary border-opacity-10 d-flex align-items-center gap-2" style="max-width: 250px;">
                     <i class="fa-solid fa-microphone text-primary"></i>
-                    <audio src="${msg.mediaUrl}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
+                    <audio src="${audioSrc}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
                 </div>
             `;
         } else {
             // It's an image or video
-            mediaHtml = `<img src="${msg.mediaUrl}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+            const imgSrc = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `uploads/${msg.mediaUrl.split('/').pop()}`;
+            mediaHtml = `<img src="${imgSrc}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
         }
     }
 
@@ -679,115 +866,8 @@ messageInput.addEventListener('input', () => {
     }, 3000);
 });
 
-// --- Voice Note Logic ---
 
-voiceRecBtn.onclick = async () => {
-    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        startRecording();
-    } else {
-        stopRecording(false); // finish and send
-    }
-};
-
-cancelRecordingBtn.onclick = () => {
-    stopRecording(true); // cancel and delete
-};
-
-async function startRecording() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = (e) => {
-            audioChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = async () => {
-            if (mediaRecorder.cancelled) return;
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-            uploadVoiceNote(audioBlob);
-        };
-
-        mediaRecorder.start();
-        
-        // UI Update
-        recordingStatus.classList.remove('d-none');
-        voiceRecBtn.innerHTML = '<i class="fa-solid fa-stop text-danger"></i>';
-        voiceRecBtn.classList.add('btn-danger');
-        voiceRecBtn.classList.remove('btn-light');
-        
-        startRecordingTimer();
-    } catch (err) {
-        console.error("Mic access denied:", err);
-        alert("Please allow microphone access to record voice notes.");
-    }
-}
-
-function stopRecording(cancelled) {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.cancelled = cancelled;
-        mediaRecorder.stop();
-        mediaRecorder.stream.getTracks().forEach(t => t.stop());
-    }
-    
-    // UI Update
-    recordingStatus.classList.add('d-none');
-    voiceRecBtn.innerHTML = '<i class="fa-solid fa-microphone text-primary"></i>';
-    voiceRecBtn.classList.remove('btn-danger');
-    voiceRecBtn.classList.add('btn-light');
-    
-    stopRecordingTimer();
-}
-
-function startRecordingTimer() {
-    recordingSeconds = 0;
-    recordingTimerUI.innerText = "00:00";
-    recordingInterval = setInterval(() => {
-        recordingSeconds++;
-        const mins = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
-        const secs = (recordingSeconds % 60).toString().padStart(2, '0');
-        recordingTimerUI.innerText = `${mins}:${secs}`;
-    }, 1000);
-}
-
-function stopRecordingTimer() {
-    clearInterval(recordingInterval);
-}
-
-async function uploadVoiceNote(blob) {
-    const formData = new FormData();
-    formData.append('media', blob, `voice-note-${Date.now()}.webm`);
-
-    try {
-        const res = await fetch(`${API_URL}/upload`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${currentUser.token}` },
-            body: formData
-        });
-
-        const data = await res.json();
-        if (res.ok) {
-            const msgData = {
-                content: "",
-                mediaUrl: data.url,
-                chatId: currentChat,
-                sender: { _id: currentUser._id, username: currentUser.username }
-            };
-            socket.emit('new message', msgData);
-            
-            // Optimistic Update
-            const optimisticMsg = {
-                ...msgData,
-                createdAt: new Date().toISOString(),
-                _id: 'temp-' + Date.now()
-            };
-            appendMessageUI(optimisticMsg);
-        }
-    } catch (err) {
-        console.error("Voice upload failed:", err);
-    }
-}
+// Messaging Logic and Smart Replies follow (Redundant voice recording logic removed)
 
 // Smart Replies
 async function generateSmartReplies(msgContent) {
@@ -993,6 +1073,24 @@ function startTimer() {
     }, 1000);
 }
 
+// RESTORED: Multi-User WebRTC Initialization
+async function startMultiUserCall() {
+    try {
+        // Support both video and voice-only grid modes
+        const streamConstraints = { video: true, audio: true };
+        localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
+        
+        videoCallOverlay.classList.remove('d-none');
+        addLocalStream(); // Shows local preview in grid
+
+        socket.emit("join-call", currentChat._id);
+        startTimer();
+    } catch (err) {
+        console.error("Multi-user call failed:", err);
+        alert("Could not access camera/mic for group call.");
+    }
+}
+
 // Mute / Video Toggles
 toggleMicBtn.addEventListener('click', () => {
     isMuted = !isMuted;
@@ -1003,18 +1101,72 @@ toggleMicBtn.addEventListener('click', () => {
     }
 });
 
-toggleVideoBtn.addEventListener('click', () => {
-    isVideoOff = !isVideoOff;
-    if (localStream && localStream.getVideoTracks().length > 0) {
-        localStream.getVideoTracks()[0].enabled = !isVideoOff;
-        toggleVideoBtn.classList.toggle('active', isVideoOff);
-        toggleVideoBtn.innerHTML = isVideoOff ? '<i class="fa-solid fa-video-slash"></i>' : '<i class="fa-solid fa-video"></i>';
-        localVideo.style.opacity = isVideoOff ? '0' : '1';
+// VOICE RECORDING LOGIC
+voiceRecBtn.addEventListener('click', async () => {
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+            
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const formData = new FormData();
+                formData.append('media', audioBlob, 'voice-note.webm');
+                
+                try {
+                    const res = await fetch(`${API_URL}/upload`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${currentUser.token}` },
+                        body: formData
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        sendMessage(null, data.url);
+                    }
+                } catch (err) { console.error("Voice upload err:", err); }
+                
+                // Clear UI
+                recordingStatus.classList.add('d-none');
+                clearInterval(recordingInterval);
+                recordingSeconds = 0;
+            };
+
+            mediaRecorder.start();
+            recordingStatus.classList.remove('d-none');
+            recordingInterval = setInterval(() => {
+                recordingSeconds++;
+                const m = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
+                const s = (recordingSeconds % 60).toString().padStart(2, '0');
+                recordingTimerUI.innerText = `${m}:${s}`;
+            }, 1000);
+            
+            voiceRecBtn.innerHTML = '<i class="fa-solid fa-stop text-danger"></i>';
+        } catch (err) { alert("Microphone access denied."); }
+    } else {
+        mediaRecorder.stop();
+        voiceRecBtn.innerHTML = '<i class="fa-solid fa-microphone text-primary"></i>';
     }
 });
 
-// WEBRTC ACTIONS
+cancelRecordingBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        audioChunks = []; // Clear data so it doesn't upload
+    }
+});
+
+// WEBRTC ACTIONS (Standard and Mesh)
 async function handleStartCall(type) {
+    if (!currentChat) return;
+    
+    if (currentChat.isGroupChat) {
+        startMultiUserCall();
+        return;
+    }
+
     const otherUser = currentChat.users.find(u => u._id !== currentUser._id);
     if (!onlineUsersList.includes(otherUser._id)) {
         alert("User is offline!");
@@ -1033,41 +1185,24 @@ async function handleStartCall(type) {
     callTimerDisplay.classList.add('d-none');
     ringName.innerText = otherUser.username;
     ringStatus.innerText = "Ringing...";
-    ringAvatar.src = otherUser.profilePic || defaultAvatar;
+    ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
     
-    // UI visibility based on type
-    if (type === 'voice') {
-        localVideo.classList.add('d-none');
-        remoteVideo.classList.add('d-none');
-        toggleVideoBtn.classList.add('d-none');
-    } else {
-        localVideo.classList.remove('d-none');
-        remoteVideo.classList.add('d-none'); // Wait till match
-        toggleVideoBtn.classList.remove('d-none');
-    }
-
     try {
-        const streamConstraints = { 
-            video: type === 'video', 
-            audio: true 
-        };
+        const streamConstraints = { video: type === 'video', audio: true };
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
-        if (type === 'video') localVideo.srcObject = localStream;
+        if (type === 'video') {
+             // In 1:1, we use manual localVideo/remoteVideo
+             // But let's use the grid for consistency
+             addLocalStream(localStream);
+        }
 
-        // Play Outgoing ringtone
         outgoingRingtone.play().catch(e => console.log("Outgoing audio block: ", e));
 
         peer = new SimplePeer({
             initiator: true,
             trickle: false,
             stream: localStream,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                ]
-            }
+            config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
         });
 
         peer.on('signal', data => {
@@ -1081,11 +1216,9 @@ async function handleStartCall(type) {
         });
 
         peer.on('stream', stream => {
-            remoteVideo.srcObject = stream;
-            if (callType === 'video') {
-                remoteVideo.classList.remove('d-none');
-                ringingUI.classList.add('d-none');
-            }
+             addRemoteStream(otherUser._id, otherUser.username, stream);
+             ringingUI.classList.add('d-none');
+             startTimer();
         });
     } catch (err) {
         console.error("Call initialization error:", err);

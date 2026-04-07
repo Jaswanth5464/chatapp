@@ -191,6 +191,16 @@
             <span id="call-duration-timer" class="badge bg-light text-dark fs-5 rounded-pill px-4 shadow py-2 fw-bold">00:00</span>
         </div>
 
+        <!-- Incoming/Outgoing Ringing UI -->
+        <div id="call-ringing-ui" class="d-none d-flex flex-column align-items-center animate__animated animate__pulse animate__infinite">
+            <div class="position-relative mb-4">
+                <img id="ring-avatar" src="" class="rounded-circle border border-4 border-white shadow-lg" style="width: 150px; height: 150px; object-fit: cover;">
+                <div class="position-absolute bottom-0 end-0 bg-success border border-white border-4 rounded-circle" style="width: 30px; height: 30px;"></div>
+            </div>
+            <h2 id="ring-name" class="text-white fw-bold mb-2">User</h2>
+            <p id="ring-status" class="text-white opacity-75 fs-5">Ringing...</p>
+        </div>
+
         <div id="call-controls" class="mb-5 px-4 py-2 bg-dark bg-opacity-25 rounded-pill d-flex gap-3 align-items-center border border-white border-opacity-10 shadow-lg" style="backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
             <button id="toggle-mic-btn" class="btn btn-light rounded-circle p-3 shadow" title="Mute/Unmute"><i class="fa-solid fa-microphone"></i></button>
             <button id="toggle-video-btn" class="btn btn-light rounded-circle p-3 shadow" title="Camera ON/OFF"><i class="fa-solid fa-video"></i></button>
