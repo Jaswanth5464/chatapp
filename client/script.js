@@ -115,6 +115,23 @@ const callRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/1351
 callRingtone.loop = true;
 const callEndSound = new Audio('https://assets.mixkit.co/active_storage/sfx/1352/1352-preview.mp3');
 
+// Smart URL Sanitizer for Render/Production
+function getSafeUrl(url) {
+    if (!url) return defaultAvatar;
+    if (typeof url !== 'string') return defaultAvatar;
+    
+    // If it contains localhost/127.0.0.1, extract only the uploads path
+    if (url.includes('localhost:') || url.includes('127.0.0.1:')) {
+        const parts = url.split('/uploads/');
+        return parts[1] ? '/uploads/' + parts[1] : url;
+    }
+    
+    // Ensure relative uploads are treated as relative to root
+    if (url.startsWith('uploads/')) return '/' + url;
+    
+    return url;
+}
+
 function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -137,7 +154,7 @@ function showChatView() {
     chatContainer.classList.remove('d-none');
     
     myUsernameDisplay.innerText = currentUser.username;
-    if (currentUser.profilePic) myProfilePic.src = currentUser.profilePic;
+    if (currentUser.profilePic) myProfilePic.src = getSafeUrl(currentUser.profilePic);
     
     // Mobile View Setup
     if (window.innerWidth <= 768) {
@@ -205,7 +222,7 @@ function renderChats(chats) {
         
         let profilePicUrl = defaultAvatar;
         if (!isGroup && otherUser && otherUser.profilePic) {
-            profilePicUrl = otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`;
+            profilePicUrl = getSafeUrl(otherUser.profilePic);
         }
 
         const div = document.createElement('div');
@@ -391,7 +408,7 @@ function renderChats(chats) {
         
         let profilePicUrl = defaultAvatar;
         if (!isGroup && otherUser && otherUser.profilePic) {
-            profilePicUrl = otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`;
+            profilePicUrl = getSafeUrl(otherUser.profilePic);
         }
 
         const div = document.createElement('div');
@@ -640,13 +657,14 @@ function prependMessageUI(msg) {
     
     let mediaHtml = '';
     if (msg.mediaUrl && !isDeleted) {
+        const safeMedia = getSafeUrl(msg.mediaUrl);
         if (msg.mediaUrl.endsWith('.webm') || msg.mediaUrl.includes('audio')) {
              mediaHtml = `<div class="voice-note-container p-2 mb-2 rounded bg-light border border-primary border-opacity-10 d-flex align-items-center gap-2" style="max-width: 250px;">
                             <i class="fa-solid fa-microphone text-primary"></i>
-                            <audio src="${msg.mediaUrl}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
+                            <audio src="${safeMedia}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
                         </div>`;
         } else {
-            mediaHtml = `<img src="${msg.mediaUrl}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+            mediaHtml = `<img src="${safeMedia}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
         }
     }
 
@@ -720,19 +738,18 @@ function appendMessageUI(msg) {
     
     let mediaHtml = '';
     if (msg.mediaUrl && !isDeleted) {
+        const safeMedia = getSafeUrl(msg.mediaUrl);
         if (msg.mediaUrl.endsWith('.webm') || msg.mediaUrl.includes('audio')) {
             // It's a voice note
-            const audioSrc = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `uploads/${msg.mediaUrl.split('/').pop()}`;
             mediaHtml = `
                 <div class="voice-note-container p-2 mb-2 rounded bg-light border border-primary border-opacity-10 d-flex align-items-center gap-2" style="max-width: 250px;">
                     <i class="fa-solid fa-microphone text-primary"></i>
-                    <audio src="${audioSrc}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
+                    <audio src="${safeMedia}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
                 </div>
             `;
         } else {
             // It's an image or video
-            const imgSrc = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `uploads/${msg.mediaUrl.split('/').pop()}`;
-            mediaHtml = `<img src="${imgSrc}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+            mediaHtml = `<img src="${safeMedia}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
         }
     }
 
@@ -1106,7 +1123,7 @@ async function handleStartCall(type) {
         if (ringName) ringName.innerText = otherUser.username;
         if (ringStatus) ringStatus.innerText = "Ringing...";
         if (ringAvatar) {
-            ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
+            ringAvatar.src = getSafeUrl(otherUser.profilePic);
         }
     }
     
@@ -1168,7 +1185,7 @@ acceptCallBtn.addEventListener('click', async () => {
     
     const sender = users.find(u=>u._id === activeCallUserId);
     if (ringAvatar) {
-        ringAvatar.src = sender ? (sender.profilePic || defaultAvatar) : defaultAvatar;
+        ringAvatar.src = getSafeUrl(sender ? sender.profilePic : defaultAvatar);
     }
 
     try {
