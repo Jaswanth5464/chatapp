@@ -1,0 +1,56 @@
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const http = require('http');
+const { initSocket } = require('./sockets/socket');
+
+// Route imports
+const authRoutes = require('./routes/authRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
+
+const app = express();
+const server = http.createServer(app);
+
+// Middleware
+app.use(cors()); // Allow all cross-origin requests for now (CORS fix)
+app.use(express.json()); // Parse JSON bodies
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Initialize Socket.io with the HTTP server
+initSocket(server);
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/upload', uploadRoutes);
+
+// Static files for frontend
+app.use(express.static(path.join(__dirname, '../client')));
+
+// Catch-all to serve index.html for any frontend routing
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client', 'index.html'));
+});
+
+// Root Endpoint for deployment health check
+app.get('/', (req, res) => {
+    res.send('Smart Chat API is running...');
+});
+
+// Database Connection & Server Start
+const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/smart-chat';
+
+mongoose.connect(MONGO_URI)
+    .then(() => {
+        console.log('✅ Connected to MongoDB');
+        server.listen(PORT, () => {
+            console.log(`🚀 Server running on port ${PORT}`);
+        });
+    })
+    .catch((err) => {
+        console.error('❌ MongoDB connection error:', err);
+    });

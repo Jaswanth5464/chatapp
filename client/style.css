@@ -1,0 +1,285 @@
+html, body {
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body.bg-light {
+    background-color: #f4f7f6 !important;
+}
+
+/* Glassmorphism Auth Layout */
+#auth-view {
+    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+    min-height: 100vh;
+}
+
+@keyframes gradientBG {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+.glass-card {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 24px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    color: white;
+}
+
+.glass-card .nav-pills .nav-link {
+    color: rgba(255,255,255,0.7);
+    border-radius: 12px;
+}
+.glass-card .nav-pills .nav-link.active {
+    background-color: rgba(255,255,255,0.25);
+    color: white;
+    font-weight: bold;
+}
+
+.glass-card .form-control {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    border-radius: 12px;
+}
+
+.glass-card .form-control::placeholder {
+    color: rgba(255, 255, 255, 0.8);
+}
+.glass-card .form-control:focus {
+    background: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 0.25rem rgba(255, 255, 255, 0.25);
+    border-color: white;
+}
+
+.auth-btn {
+    background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
+    border: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+    font-weight: bold;
+}
+.auth-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+}
+
+/* Chat Background */
+.bg-chat {
+    background-color: #e5ddd5;
+    background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d1d1d1' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* Smooth Scrolling */
+#chat-messages, #users-list {
+    scroll-behavior: smooth;
+}
+
+/* Scrollbar customization */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* User List Items */
+.user-item {
+    cursor: pointer;
+    transition: background 0.2s;
+    border-bottom: 1px solid #f1f5f9;
+}
+.user-item:hover, .user-item.active {
+    background-color: #f1f5f9;
+}
+
+/* Status Indicator */
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    background-color: #ccc;
+}
+.status-dot.online {
+    background-color: #22c55e;
+}
+
+/* Chat Bubbles */
+.message-bubble {
+    max-width: 75%;
+    padding: 10px 14px;
+    border-radius: 18px;
+    margin-bottom: 8px;
+    position: relative;
+    word-wrap: break-word;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    font-size: 15px;
+}
+
+.message-sent {
+    background-color: #dcf8c6;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+
+.message-received {
+    background-color: #ffffff;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+}
+
+.chat-image {
+    max-width: 100%;
+    border-radius: 12px;
+    margin-top: 5px;
+    cursor: pointer;
+}
+
+.message-call-log {
+    background-color: #f1f5f9;
+    align-self: center;
+    border-radius: 12px;
+    font-size: 13px;
+    color: #475569;
+    padding: 6px 16px;
+    margin: 12px 0;
+    box-shadow: none;
+    text-align: center;
+    max-width: 90%;
+}
+
+/* Message Meta */
+.message-meta {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+    text-align: right;
+    display: block;
+}
+
+/* Smart Replies */
+.smart-reply-chip {
+    background-color: #fff;
+    border: 1px solid #0d6efd;
+    color: #0d6efd;
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-right: 8px;
+    margin-bottom: 8px;
+    display: inline-block;
+}
+.smart-reply-chip:hover {
+    background-color: #0d6efd;
+    color: white;
+}
+
+/* Responsive fixes */
+@media (max-width: 768px) {
+    #sidebar.hidden-mobile {
+        display: none !important;
+    }
+    #chat-container > .row > .bg-chat {
+        display: flex !important;
+    }
+    .bg-chat.hidden-mobile {
+        display: none !important;
+    }
+}
+
+/* Emoji Grid */
+.emoji-item {
+    font-size: 24px;
+    cursor: pointer;
+    transition: transform 0.2s;
+    -webkit-user-select: none;
+    user-select: none;
+    padding: 2px;
+}
+.emoji-item:hover {
+    transform: scale(1.2);
+    background-color: #f1f5f9;
+    border-radius: 4px;
+}
+
+/* --- Video Call & Ringing --- */
+.ringing-avatar-container {
+    position: relative;
+    display: inline-block;
+    z-index: 1;
+}
+
+.pulse-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: rgba(34, 197, 94, 0.4);
+    z-index: -1;
+    animation: ring-pulse 2s infinite;
+}
+
+@keyframes ring-pulse {
+    0% {
+        width: 120px;
+        height: 120px;
+        opacity: 0.8;
+    }
+    100% {
+        width: 250px;
+        height: 250px;
+        opacity: 0;
+    }
+}
+
+#video-call-overlay .btn-light {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+    color: white;
+    transition: all 0.3s;
+}
+
+#video-call-overlay .btn-light:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+#video-call-overlay .btn-light.active {
+    background: rgba(255, 255, 255, 0.8);
+    color: #333;
+}
+
+#call-timer {
+    text-shadow: 0 0 10px rgba(0,0,0,0.5);
+    background: rgba(0,0,0,0.3);
+    padding: 5px 15px;
+    border-radius: 20px;
+    display: inline-block;
+}
+
+.message-call-log {
+    transition: transform 0.2s;
+}
+.message-call-log:hover {
+    transform: scale(1.02);
+}
