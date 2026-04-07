@@ -57,7 +57,7 @@ const callerNameDisplay = document.getElementById('caller-name');
 const callerInitialDisplay = document.getElementById('caller-initial');
 const toggleMicBtn = document.getElementById('toggle-mic-btn');
 const toggleVideoBtn = document.getElementById('toggle-video-btn');
-const callTimerDisplay = document.getElementById('call-timer');
+const callTimerDisplay = document.getElementById('call-duration-timer');
 const ringingUI = document.getElementById('call-ringing-ui');
 const ringAvatar = document.getElementById('ring-avatar');
 const ringName = document.getElementById('ring-name');
@@ -98,13 +98,15 @@ const callDurationTimerUI = document.getElementById('call-duration-timer');
 // Voice Recording DOM
 const voiceRecBtn = document.getElementById('voice-rec-btn');
 const recordingStatus = document.getElementById('recording-status');
-const recordingTimerUI = document.getElementById('recording-timer');
+const recordingTimer = document.getElementById('recording-timer');
 const cancelRecordingBtn = document.getElementById('cancel-recording');
-const videoGrid = document.getElementById('video-grid');
 
-let mediaRecorder;
+// Voice Recording State
+let mediaRecorder = null;
 let audioChunks = [];
-let peer = null; // For 1:1 calls
+let recordingInterval = null;
+let recordingSeconds = 0;
+const videoGrid = document.getElementById('video-grid');
 
 // Audio Objects
 const outgoingRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3');
@@ -116,8 +118,6 @@ const callEndSound = new Audio('https://assets.mixkit.co/active_storage/sfx/1352
 function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
-let recordingInterval;
-let recordingSeconds = 0;
 
 // Initialize app
 function init() {
@@ -991,6 +991,10 @@ function connectSocket() {
 
     // --- Mesh Signaling Listeners ---
     socket.on("user-joined-call", ({ socketId, userId }) => {
+        // Stop outgoing ringtone once a peer joins
+        outgoingRingtone.pause();
+        outgoingRingtone.currentTime = 0;
+
         const p = createPeer(socketId, userId, true);
         peers.set(socketId, p);
         
@@ -1000,6 +1004,12 @@ function connectSocket() {
     });
 
     socket.on("signal-peer-received", ({ signal, fromSocketId, fromUserId }) => {
+        // Stop all ringtones as we are receiving signaling
+        outgoingRingtone.pause();
+        outgoingRingtone.currentTime = 0;
+        callRingtone.pause();
+        callRingtone.currentTime = 0;
+
         let p = peers.get(fromSocketId);
         if (!p) {
             p = createPeer(fromSocketId, fromUserId, false);
@@ -1057,132 +1067,13 @@ function connectSocket() {
     });
 
     socket.on('callAccepted', (signal) => {
-        if (peer) peer.signal(signal);
-        
-        // Stop outgoing ringtone
+        //MESH HANDLE: Simply clear the ringing UI and let the grid fill
         outgoingRingtone.pause();
         outgoingRingtone.currentTime = 0;
-        
-        // Hide ringing UI
-        ringingUI.classList.add('d-none');
-        
-        // Show core call UI
-        if (callType === 'video') {
-            remoteVideo.classList.remove('d-none');
-            localVideo.classList.remove('d-none');
-        } else {
-            // It's a voice call, keep avatars visible or something
-            remoteVideo.classList.add('d-none');
-            localVideo.classList.add('d-none');
-            ringingUI.classList.remove('d-none'); // Show avatar
-            ringStatus.innerText = "In call";
-        }
-        
+        if (ringingUI) ringingUI.classList.add('d-none');
         startTimer();
     });
-
-    socket.on('callEnded', () => {
-        endCall('Remote ended');
-    });
 }
-
-// Timer Logic
-function startTimer() {
-    clearInterval(callDurationTimer);
-    secondsElapsed = 0;
-    callTimerDisplay.classList.remove('d-none');
-    callDurationTimer = setInterval(() => {
-        secondsElapsed++;
-        const mins = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
-        const secs = (secondsElapsed % 60).toString().padStart(2, '0');
-        callTimerDisplay.innerText = `${mins}:${secs}`;
-    }, 1000);
-}
-
-// RESTORED: Multi-User WebRTC Initialization
-async function startMultiUserCall() {
-    try {
-        // Support both video and voice-only grid modes
-        const streamConstraints = { video: true, audio: true };
-        localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
-        
-        videoCallOverlay.classList.remove('d-none');
-        addLocalStream(); // Shows local preview in grid
-
-        socket.emit("join-call", currentChat._id);
-        startTimer();
-    } catch (err) {
-        console.error("Multi-user call failed:", err);
-        alert("Could not access camera/mic for group call.");
-    }
-}
-
-// Mute / Video Toggles
-toggleMicBtn.addEventListener('click', () => {
-    isMuted = !isMuted;
-    if (localStream) {
-        localStream.getAudioTracks()[0].enabled = !isMuted;
-        toggleMicBtn.classList.toggle('active', isMuted);
-        toggleMicBtn.innerHTML = isMuted ? '<i class="fa-solid fa-microphone-slash"></i>' : '<i class="fa-solid fa-microphone"></i>';
-    }
-});
-
-// VOICE RECORDING LOGIC
-voiceRecBtn.addEventListener('click', async () => {
-    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-            
-            mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
-            
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                const formData = new FormData();
-                formData.append('media', audioBlob, 'voice-note.webm');
-                
-                try {
-                    const res = await fetch(`${API_URL}/upload`, {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${currentUser.token}` },
-                        body: formData
-                    });
-                    const data = await res.json();
-                    if (res.ok) {
-                        sendMessage(null, data.url);
-                    }
-                } catch (err) { console.error("Voice upload err:", err); }
-                
-                // Clear UI
-                recordingStatus.classList.add('d-none');
-                clearInterval(recordingInterval);
-                recordingSeconds = 0;
-            };
-
-            mediaRecorder.start();
-            recordingStatus.classList.remove('d-none');
-            recordingInterval = setInterval(() => {
-                recordingSeconds++;
-                const m = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
-                const s = (recordingSeconds % 60).toString().padStart(2, '0');
-                recordingTimerUI.innerText = `${m}:${s}`;
-            }, 1000);
-            
-            voiceRecBtn.innerHTML = '<i class="fa-solid fa-stop text-danger"></i>';
-        } catch (err) { alert("Microphone access denied."); }
-    } else {
-        mediaRecorder.stop();
-        voiceRecBtn.innerHTML = '<i class="fa-solid fa-microphone text-primary"></i>';
-    }
-});
-
-cancelRecordingBtn.addEventListener('click', () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-        audioChunks = []; // Clear data so it doesn't upload
-    }
-});
 
 // UNIFIED WEBRTC ACTIONS (Standard & Group use the same Mesh Grid)
 async function handleStartCall(type) {
@@ -1220,7 +1111,14 @@ async function handleStartCall(type) {
     }
     
     try {
-        const streamConstraints = { video: type === 'video', audio: true };
+        const streamConstraints = { 
+            video: type === 'video', 
+            audio: { 
+                echoCancellation: true, 
+                noiseSuppression: true, 
+                autoGainControl: true 
+            } 
+        };
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
         
         // Show local preview in grid
@@ -1274,7 +1172,14 @@ acceptCallBtn.addEventListener('click', async () => {
     }
 
     try {
-        const streamConstraints = { video: callType === 'video', audio: true };
+        const streamConstraints = { 
+            video: callType === 'video', 
+            audio: { 
+                echoCancellation: true, 
+                noiseSuppression: true, 
+                autoGainControl: true 
+            } 
+        };
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
         
         // Show local preview in grid
@@ -1289,7 +1194,7 @@ acceptCallBtn.addEventListener('click', async () => {
     }
 });
 
-function endCall(reason) {
+function endCall(reason = 'Ended') {
     console.log("Call Ended:", reason);
     
     // Stop all media
@@ -2066,36 +1971,95 @@ shareScreenBtn.onclick = async () => {
     }
 };
 
-function stopScreenSharing() {
-    const videoTrack = localStream.getVideoTracks()[0];
-    for (let [socketId, p] of peers) {
-        p.replaceTrack(displayStream.getVideoTracks()[0], videoTrack, localStream);
+// --- Voice Recording Logic ---
+async function startRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+            audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            if (audioChunks.length > 0 && recordingSeconds > 0) {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                await uploadVoiceNote(audioBlob);
+            }
+            // Stop tracks to release mic
+            stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        recordingSeconds = 0;
+        if (recordingStatus) recordingStatus.classList.remove('d-none');
+        
+        recordingInterval = setInterval(() => {
+            recordingSeconds++;
+            const mins = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
+            const secs = (recordingSeconds % 60).toString().padStart(2, '0');
+            if (recordingTimer) recordingTimer.innerText = `${mins}:${secs}`;
+        }, 1000);
+
+        if (voiceRecBtn) voiceRecBtn.classList.add('text-danger', 'animate__animated', 'animate__pulse', 'animate__infinite');
+    } catch (err) {
+        console.error("Recording start failed:", err);
+        alert("Microphone access denied.");
     }
-    document.getElementById('my-video').srcObject = localStream;
-    displayStream.getTracks().forEach(t => t.stop());
-    isScreenSharing = false;
-    shareScreenBtn.classList.remove('btn-success');
 }
 
-endCallBtn.onclick = () => {
-    socket.emit("leave-call", currentChat._id);
-    peers.forEach(p => p.destroy());
-    peers.clear();
-    if (localStream) localStream.getTracks().forEach(t => t.stop());
-    if (displayStream) displayStream.getTracks().forEach(t => t.stop());
-    videoGrid.innerHTML = '';
-    videoCallOverlay.classList.add('d-none');
-};
-
-// Update starting call functionality
-videoCallBtn.onclick = () => {
-    if (currentChat.isGroupChat) {
-        startMultiUserCall();
-    } else {
-        // Existing 1-on-1 logic... but let's upgrade it to the new grid too
-        startMultiUserCall();
+function stopRecording(isCancel = false) {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        if (isCancel) audioChunks = []; // Clear chunks if cancelled
+        mediaRecorder.stop();
     }
-};
+    
+    clearInterval(recordingInterval);
+    if (recordingStatus) recordingStatus.classList.add('d-none');
+    if (recordingTimer) recordingTimer.innerText = "00:00";
+    if (voiceRecBtn) voiceRecBtn.classList.remove('text-danger', 'animate__animated', 'animate__pulse', 'animate__infinite');
+}
+
+async function uploadVoiceNote(blob) {
+    const formData = new FormData();
+    formData.append('media', blob, 'voice_note.webm');
+
+    try {
+        const res = await fetch(`${API_URL}/upload`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+            body: formData
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            const msgData = {
+                content: "🎤 Voice Message",
+                mediaUrl: data.url,
+                chatId: currentChat._id,
+                sender: currentUser
+            };
+            socket.emit('new message', msgData);
+            appendMessageUI({ ...msgData, createdAt: new Date().toISOString(), _id: 'temp-' + Date.now() });
+        }
+    } catch (err) {
+        console.error("Voice upload failed:", err);
+    }
+}
+
+if (voiceRecBtn) {
+    voiceRecBtn.addEventListener('click', () => {
+        if (recordingStatus && recordingStatus.classList.contains('d-none')) {
+            startRecording();
+        } else {
+            stopRecording(false);
+        }
+    });
+}
+
+if (cancelRecordingBtn) cancelRecordingBtn.addEventListener('click', () => stopRecording(true));
+
 
 // Init logic stays at the end
 init();

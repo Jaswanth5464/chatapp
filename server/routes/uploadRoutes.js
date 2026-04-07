@@ -25,14 +25,14 @@ const upload = multer({
     storage,
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
     fileFilter: function (req, file, cb) {
-        const filetypes = /jpeg|jpg|png|gif|mp4|webm/;
+        const filetypes = /jpeg|jpg|png|gif|mp4|webm|mp3|mpeg|wav/;
         const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
         const mimetype = filetypes.test(file.mimetype);
 
-        if (mimetype && extname) {
+        if (mimetype || extname) { // More flexible for audio blobs
             return cb(null, true);
         } else {
-            cb(new Error('Images and Videos only!'));
+            cb(new Error('Images, Videos and Audio only!'));
         }
     }
 });
