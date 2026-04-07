@@ -1850,6 +1850,27 @@ async function startMultiUserCall() {
 }
 
 let sharedAudioContext = null;
+let cachedIceServers = null;
+
+async function getIceServers() {
+    if (cachedIceServers) return cachedIceServers;
+    try {
+        const res = await fetch(`${API_URL}/webrtc/ice`);
+        const data = await res.json();
+        cachedIceServers = data;
+        console.log("🚀 ICE Servers loaded from secure relay");
+        return data;
+    } catch (err) {
+        console.warn("Falling back to public STUN:", err);
+        return [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
+        ];
+    }
+}
 
 function addLocalStream() {
     if (!localStream) {
@@ -1888,25 +1909,22 @@ function addLocalStream() {
     ringingUI.classList.add('d-none');
 }
 
-function createPeer(toSocketId, userId, initiator) {
+async function createPeer(toSocketId, userId, initiator) {
     // Find username from users list
     const participant = users.find(u => u && u._id === userId);
     const username = participant ? participant.username : 'User';
 
     console.log(`🏗️ Creating Peer: Initiator=${initiator}, To=${username}`);
+    
+    // Fetch fresh relay servers before starting
+    const iceServers = await getIceServers();
 
     const p = new SimplePeer({
         initiator: initiator,
         trickle: true,
         stream: localStream || undefined,
         config: {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
-            ]
+            iceServers: iceServers
         }
     });
 

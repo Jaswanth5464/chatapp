@@ -43,6 +43,36 @@ app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/upload', uploadRoutes);
 
+// --- Secure WebRTC ICE Relay ---
+const https = require('https');
+app.get("/api/webrtc/ice", (req, res) => {
+    const options = {
+        hostname: 'jaswanth5464.metered.live',
+        path: '/api/v1/turn/credentials?apiKey=LkkBd_eleyisa7b0elX-5Cs4QB-Lye8h6PK-4mx1rlxSVsKz',
+        method: 'GET'
+    };
+
+    const request = https.request(options, (response) => {
+        let data = '';
+        response.on('data', (chunk) => data += chunk);
+        response.on('end', () => {
+            try {
+                res.json(JSON.parse(data));
+            } catch (e) {
+                console.error("Parse Error:", e);
+                res.status(500).json([{ urls: "stun:stun.l.google.com:19302" }]);
+            }
+        });
+    });
+
+    request.on('error', (error) => {
+        console.error("ICE Relay Error:", error);
+        res.status(500).json([{ urls: "stun:stun.l.google.com:19302" }]);
+    });
+
+    request.end();
+});
+
 // Static files for frontend (Served from Root)
 app.use(express.static(path.join(process.cwd(), 'client')));
 
