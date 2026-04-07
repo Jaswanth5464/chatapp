@@ -220,112 +220,6 @@ function showChatView() {
     }
 }
 
-async function fetchUsersSilently() {
-    try {
-        const res = await fetch(`${API_URL}/auth/users`, {
-            headers: { 'Authorization': `Bearer ${currentUser.token}` }
-        });
-        const data = await res.json();
-        if (res.ok) {
-            users = data;
-            // No full renderChats() here to avoid flicker; 
-            // The online status is synced via onlineUsersList socket event
-        }
-    } catch (err) { }
-}
-
-// Sidebar Restoration: Show both Users and Groups
-async function fetchUsers() {
-    try {
-        const res = await fetch(`${API_URL}/auth/users`, {
-            headers: { 'Authorization': `Bearer ${currentUser.token}` }
-        });
-        const data = await res.json();
-        if (res.ok) {
-            users = data;
-            fetchChats(); // Fetch existing conversations/groups
-        }
-    } catch (err) {
-        console.error('Error fetching users:', err);
-    }
-}
-
-async function fetchChats() {
-    try {
-        const res = await fetch(`${API_URL}/chat`, {
-            headers: { 'Authorization': `Bearer ${currentUser.token}` }
-        });
-        const data = await res.json();
-        if (res.ok) {
-            renderChats(data);
-        }
-    } catch (err) {
-        console.error('Error fetching chats:', err);
-    }
-}
-
-function renderChats(chats) {
-    usersList.innerHTML = '';
-    if (!chats || chats.length === 0) {
-        usersList.innerHTML = '<div class="p-4 text-center text-muted">No conversations yet.</div>';
-        return;
-    }
-
-    chats.forEach(chat => {
-        const isGroup = chat.isGroupChat;
-        const chatTitle = isGroup ? chat.chatName : chat.users.find(u => u._id !== currentUser._id).username;
-        const otherUser = isGroup ? null : chat.users.find(u => u._id !== currentUser._id);
-        const isOnline = otherUser ? onlineUsersList.includes(otherUser._id) : false;
-        
-        let profilePicUrl = defaultAvatar;
-        if (!isGroup && otherUser && otherUser.profilePic) {
-            profilePicUrl = getSafeUrl(otherUser.profilePic);
-        }
-
-        const div = document.createElement('div');
-        div.className = 'user-item p-3 d-flex align-items-center position-relative animate__animated animate__fadeIn';
-        if (currentChat && currentChat._id === chat._id) div.classList.add('active');
-
-        div.innerHTML = `
-            <div class="position-relative me-3">
-                <div class="rounded-circle shadow-sm d-flex align-items-center justify-content-center ${isGroup ? 'bg-primary text-white' : ''}" style="width: 48px; height: 48px; overflow: hidden; background: #e2e8f0;">
-                    ${isGroup ? '<i class="fa-solid fa-users"></i>' : `<img src="${profilePicUrl}" style="width: 100%; height: 100%; object-fit: cover;">`}
-                </div>
-                ${!isGroup && isOnline ? '<span class="status-dot online position-absolute bottom-0 end-0 border border-white border-2"></span>' : ''}
-            </div>
-            <div class="flex-grow-1 overflow-hidden">
-                <div class="d-flex justify-content-between align-items-center mb-1">
-                    <h6 class="mb-0 fw-bold text-truncate">${chatTitle}</h6>
-                    <small class="text-muted" style="font-size: 0.7rem;">${chat.latestMessage ? new Date(chat.latestMessage.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</small>
-                </div>
-                <div class="text-truncate text-muted small">
-                    ${chat.latestMessage ? (chat.latestMessage.sender._id === currentUser._id ? 'You: ' : '') + chat.latestMessage.content : 'No messages yet'}
-                </div>
-            </div>
-        `;
-
-        div.onclick = () => {
-             document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
-             div.classList.add('active');
-             currentChat = chat;
-             currentChatName.innerText = chatTitle;
-             messageInput.disabled = false;
-             sendBtn.disabled = false;
-             voiceRecBtn.disabled = false;
-             
-             socket.emit('join chat', chat._id);
-             
-             // Mobile flip
-             document.body.classList.add('mobile-chat-active');
-             document.body.classList.remove('mobile-chat-hidden');
-
-             fetchMessages();
-        };
-
-        usersList.appendChild(div);
-    });
-}
-
 function showAuthView() {
     localStorage.removeItem('chatAppUser');
     currentUser = null;
@@ -421,6 +315,7 @@ togglePassword('reg-confirm-password', 'toggle-reg-confirm-pass');
 
 // Fetch users
 async function fetchUsers() {
+    if (!currentUser) return;
     try {
         const res = await fetch(`${API_URL}/auth/users`, {
             headers: { 'Authorization': `Bearer ${currentUser.token}` }
@@ -437,6 +332,7 @@ async function fetchUsers() {
 }
 
 async function fetchChats() {
+    if (!currentUser) return;
     try {
         const res = await fetch(`${API_URL}/chat`, {
             headers: { 'Authorization': `Bearer ${currentUser.token}` }
@@ -1079,7 +975,8 @@ function connectSocket() {
         }
     });
     
-    socket.on('stop typing', () => {
+    socket.on('stop typing', (room) => {
+        if (!currentChat || currentChat._id !== room) return;
         if (typingIndicator) {
             typingIndicator.classList.add('d-none');
             typingIndicator.innerText = 'Typing...';
@@ -1192,6 +1089,10 @@ function connectSocket() {
         outgoingRingtone.currentTime = 0;
         if (ringingUI) ringingUI.classList.add('d-none');
         startTimer();
+    });
+
+    socket.on('callEnded', () => {
+        endCall('Remote ended');
     });
 }
 
@@ -1907,36 +1808,6 @@ cancelReplyBtn.onclick = () => {
 
 // --- Multi-User Video Calling (Mesh) Logic ---
 
-async function startMultiUserCall() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localStream = stream;
-        videoCallOverlay.classList.remove('d-none');
-        addLocalStream();
-
-        // Start Duration Timer
-        startCallDurationTimer();
-
-        // Join the Call Room
-        socket.emit("join-call", currentChat._id);
-    } catch (err) {
-        console.error("Camera access denied:", err);
-        alert("Please allow camera access to start calling.");
-    }
-}
-
-function startCallDurationTimer() {
-    clearInterval(callDurationTimer);
-    secondsElapsed = 0;
-    callDurationTimerUI.innerText = "00:00";
-    callDurationTimer = setInterval(() => {
-        secondsElapsed++;
-        const mins = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
-        const secs = (secondsElapsed % 60).toString().padStart(2, '0');
-        callDurationTimerUI.innerText = `${mins}:${secs}`;
-    }, 1000);
-}
-
 // UNIFIED START LOGIC
 async function startMultiUserCall() {
      // Now just a wrapper for handleStartCall('video') 
@@ -2100,6 +1971,27 @@ shareScreenBtn.onclick = async () => {
     }
 };
 
+function stopScreenSharing() {
+    if (!isScreenSharing) return;
+    
+    if (displayStream) {
+        displayStream.getTracks().forEach(track => track.stop());
+    }
+    
+    // Switch back to camera in all peers
+    const videoTrack = localStream.getVideoTracks()[0];
+    for (let [socketId, p] of peers) {
+        p.replaceTrack(displayStream.getVideoTracks()[0], videoTrack, localStream);
+    }
+    
+    // Update local preview
+    document.getElementById('my-video').srcObject = localStream;
+    
+    isScreenSharing = false;
+    displayStream = null;
+    shareScreenBtn.classList.remove('btn-success');
+}
+
 // --- Voice Recording Logic ---
 async function startRecording() {
     try {
@@ -2157,7 +2049,7 @@ async function uploadVoiceNote(blob) {
     try {
         const res = await fetch(`${API_URL}/upload`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+            headers: { 'Authorization': `Bearer ${currentUser.token}` },
             body: formData
         });
         const data = await res.json();

@@ -4,7 +4,7 @@ const Chat = require('../models/Chat');
 const User = require('../models/User');
 
 let io;
-const onlineUsers = new Map();
+const onlineUsers = new Map(); // Map<userId, Set<socketId>>
 
 const initSocket = (server) => {
     io = new Server(server, {
@@ -19,12 +19,16 @@ const initSocket = (server) => {
 
         // User setup
         socket.on("setup", async (userData) => {
+            if (!userData || !userData._id) return;
             const userIdStr = userData._id.toString();
             socket.join(userIdStr);
             
-            // Add user to online map
-            onlineUsers.set(userIdStr, socket.id);
-            socket.userId = userIdStr; // Store in socket instance for disconnect
+            // Multi-tab support: Add socket.id to a Set for this userId
+            if (!onlineUsers.has(userIdStr)) {
+                onlineUsers.set(userIdStr, new Set());
+            }
+            onlineUsers.get(userIdStr).add(socket.id);
+            socket.userId = userIdStr;
             
             // Update user status in DB
             await User.findByIdAndUpdate(userIdStr, { isOnline: true });
@@ -49,22 +53,19 @@ const initSocket = (server) => {
                 const undeliveredIdList = undeliveredMessages.map(m => m._id);
 
                 if (undeliveredIdList.length > 0) {
-                    // Update to delivered
                     await Message.updateMany(
                         { _id: { $in: undeliveredIdList } },
                         { status: 'delivered' }
                     );
 
-                    // Re-fetch populated or simulate
                     undeliveredMessages.forEach(async msg => {
                         msg.status = 'delivered';
                         let fullMsg = await User.populate(msg, { path: "chatId.users", select: "username" });
                         socket.emit("message recieved", fullMsg);
                         
-                        // Notify sender that it delivered
                         const senderIdStr = msg.sender._id.toString();
                         if (onlineUsers.has(senderIdStr)) {
-                            socket.to(senderIdStr).emit("message status update", {
+                            io.to(senderIdStr).emit("message status update", {
                                 messageId: msg._id,
                                 status: "delivered"
                             });
@@ -82,9 +83,9 @@ const initSocket = (server) => {
             console.log("User joined room: " + room);
         });
 
-        // Typing indicators
-        socket.on("typing", ({ room, username }) => socket.in(room).emit("typing", username));
-        socket.on("stop typing", (room) => socket.in(room).emit("stop typing"));
+        // Typing indicators - Changed to send object { username, room }
+        socket.on("typing", ({ room, username }) => socket.in(room).emit("typing", { username, room }));
+        socket.on("stop typing", (room) => socket.in(room).emit("stop typing", room));
 
         // New message
         socket.on("new message", async (newMessageRecieved) => {
@@ -164,22 +165,25 @@ const initSocket = (server) => {
             } catch (err) { }
         });
 
-        // WebRTC Calling Signaling
-        socket.on("callUser", ({ userToCall, signalData, from, name, type }) => {
-            if (onlineUsers.has(userToCall)) {
-                socket.in(userToCall).emit("callUser", { signal: signalData, from, name, type });
+        // Signaling logic - Normalized ID rooms
+        socket.on("callUser", ({ userToCall, signalData, from, name, type, chatId }) => {
+            const targetId = userToCall?.toString();
+            if (targetId && onlineUsers.has(targetId)) {
+                io.to(targetId).emit("callUser", { signal: signalData, from, name, type, chatId });
             }
         });
 
         socket.on("answerCall", ({ to, signal }) => {
-            if (onlineUsers.has(to)) {
-                socket.in(to).emit("callAccepted", signal);
+            const targetId = to?.toString();
+            if (targetId && onlineUsers.has(targetId)) {
+                io.to(targetId).emit("callAccepted", signal);
             }
         });
 
         socket.on("endCall", ({ to }) => {
-            if (onlineUsers.has(to)) {
-                socket.in(to).emit("callEnded");
+            const targetId = to?.toString();
+            if (targetId && onlineUsers.has(targetId)) {
+                io.to(targetId).emit("callEnded");
             }
         });
 
