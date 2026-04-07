@@ -3,7 +3,14 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
+const fs = require('fs');
 const { initSocket } = require('./sockets/socket');
+
+// Ensure uploads directory exists
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)){
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 // Route imports
 const authRoutes = require('./routes/authRoutes');
@@ -16,6 +23,12 @@ const server = http.createServer(app);
 // Middleware
 app.use(cors()); // Allow all cross-origin requests for now (CORS fix)
 app.use(express.json()); // Parse JSON bodies
+
+// Debug logger
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+});
 const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 

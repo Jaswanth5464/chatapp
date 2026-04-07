@@ -738,7 +738,14 @@ async function handleStartCall(type) {
         peer = new SimplePeer({
             initiator: true,
             trickle: false,
-            stream: localStream
+            stream: localStream,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                ]
+            }
         });
 
         peer.on('signal', data => {
@@ -809,7 +816,14 @@ acceptCallBtn.addEventListener('click', async () => {
         peer = new SimplePeer({
             initiator: false,
             trickle: false,
-            stream: localStream
+            stream: localStream,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                ]
+            }
         });
 
         peer.on('signal', data => {
