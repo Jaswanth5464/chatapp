@@ -1006,6 +1006,7 @@ function connectSocket() {
     });
 
     socket.on("signal-peer-received", ({ signal, fromSocketId, fromUserId }) => {
+        console.log(`📡 Inbound [${signal.type || 'candidate'}] signal from socket: ${fromSocketId} (User: ${fromUserId})`);
         // Stop all ringtones as we are receiving signaling
         outgoingRingtone.pause();
         outgoingRingtone.currentTime = 0;
@@ -1838,6 +1839,15 @@ function addLocalStream() {
         console.warn("⚠️ No local stream available to add");
         return;
     }
+    
+    // Debug Audio Context
+    if (sharedAudioContext) {
+        console.log("🔊 Current AudioContext state:", sharedAudioContext.state);
+        if (sharedAudioContext.state === 'suspended') {
+            sharedAudioContext.resume().then(() => console.log("🔊 AudioContext resumed"));
+        }
+    }
+
     const existing = document.getElementById('local-video-preview');
     if (existing) existing.remove();
 
@@ -1882,23 +1892,38 @@ function createPeer(toSocketId, userId, initiator) {
     });
 
     p.on('signal', signal => {
-        console.log(`📡 Signaling to ${username} (${toSocketId})`);
+        console.log(`📡 Sending [${signal.type || 'candidate'}] signal to ${username} (${toSocketId})`);
         socket.emit('signal-peer', { toSocketId, signal, fromUserId: currentUser._id });
     });
 
     p.on('stream', stream => {
-        console.log(`✅ Received remote stream from ${username}`);
+        console.log(`✅ Received remote stream [${stream.id}] from ${username}. Tracks:`, 
+            stream.getTracks().map(t => `${t.kind} (id:${t.id}, state:${t.readyState}, enabled:${t.enabled})`));
+        
         addRemoteStream(userId, username, stream);
-        // Ensure ring is hidden when we get a remote participant
         if (ringingUI) ringingUI.classList.add('d-none');
     });
 
     p.on('connect', () => {
-        console.log(`🤝 Peer connected with ${username}`);
+        console.log(`🤝 [PEER CONNECTED] with ${username}. RTC connection state:`, p._pc ? p._pc.connectionState : 'n/a');
+        if (ringStatus) ringStatus.innerText = "Connected!";
     });
 
+    // Detailed ICE and Connection State Tracking
+    if (p._pc) {
+        p._pc.onconnectionstatechange = () => {
+            console.log(`📊 [RTC STATE] with ${username}: ${p._pc.connectionState}`);
+            if (p._pc.connectionState === 'failed' || p._pc.connectionState === 'disconnected') {
+                if (ringStatus) ringStatus.innerText = "Connection Failed.";
+            }
+        };
+        p._pc.oniceconnectionstatechange = () => {
+            console.log(`📊 [ICE STATE] with ${username}: ${p._pc.iceConnectionState}`);
+        };
+    }
+
     p.on('close', () => {
-        console.log(`❕ Peer connection with ${username} closed`);
+        console.log(`❕ [PEER CLOSED] with ${username}`);
         const vid = document.getElementById(`video-${userId}`);
         const containerId = `video-container-${userId}`;
         const container = document.getElementById(containerId);
@@ -1931,10 +1956,19 @@ function addRemoteStream(userId, username, stream) {
         videoGrid.appendChild(container);
     }
     const video = container.querySelector('video');
+    
+    // Listen for playback events (critical for debugging black screens)
+    video.onplay = () => console.log(`▶️ Remote video PLAYING from ${username}`);
+    video.onpause = () => console.warn(`⏸️ Remote video PAUSED from ${username}`);
+    video.onwaiting = () => console.warn(`⏳ Remote video WAITING (buffering) from ${username}`);
+    video.onstalled = () => console.warn(`🛑 Remote video STALLED from ${username}`);
+    video.onerror = (e) => console.error(`❌ Video Element Error for ${username}:`, e);
+
     video.srcObject = stream;
     
     video.onloadedmetadata = () => {
-        video.play().catch(e => console.warn("Remote play failed:", e));
+        console.log(`📡 Remote metadata loaded for ${username}. Dim: ${video.videoWidth}x${video.videoHeight}`);
+        video.play().catch(e => console.warn("Remote play failed (browser block?):", e));
     };
 
     // Speaker Highlighting
