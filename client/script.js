@@ -404,7 +404,8 @@ function renderChats(chats) {
         const isGroup = chat.isGroupChat;
         const chatTitle = isGroup ? chat.chatName : chat.users.find(u => u._id !== currentUser._id).username;
         const otherUser = isGroup ? null : chat.users.find(u => u._id !== currentUser._id);
-        const isOnline = otherUser ? onlineUsersList.includes(otherUser._id) : false;
+        // Convert _id to string to ensure reliable comparison (ObjectId vs string)
+        const isOnline = otherUser ? onlineUsersList.includes(otherUser._id.toString()) : false;
         
         let profilePicUrl = defaultAvatar;
         if (!isGroup && otherUser && otherUser.profilePic) {
@@ -990,13 +991,23 @@ function connectSocket() {
 
     socket.on('message status update', ({ messageId, chatId, status }) => {
         if (messageId) {
-            // Update specific message
+            // Update a specific message tick
             const statusSpan = document.querySelector(`.msg-status[data-id="${messageId}"]`);
             if (statusSpan) statusSpan.innerHTML = getTickHtml(status, true);
-        } else if (chatId && status === 'seen') {
-            // Bulk update all ticks to seen for this chat
+        }
+        if (chatId && status === 'seen') {
+            // Bulk update ALL visible message ticks to seen (blue ✓✓)
             const spans = document.querySelectorAll('.msg-status');
             spans.forEach(span => span.innerHTML = getTickHtml('seen', true));
+        }
+        if (chatId && status === 'delivered') {
+            // Bulk update all sent ticks to delivered (grey ✓✓)
+            const spans = document.querySelectorAll('.msg-status');
+            spans.forEach(span => {
+                if (span.innerHTML.includes('✓</span>') && !span.innerHTML.includes('✓✓')) {
+                    span.innerHTML = getTickHtml('delivered', true);
+                }
+            });
         }
     });
 
@@ -1103,8 +1114,9 @@ async function handleStartCall(type) {
     const isGroup = currentChat.isGroupChat;
     const otherUser = isGroup ? null : currentChat.users.find(u => u._id !== currentUser._id);
     
-    if (!isGroup && otherUser && !onlineUsersList.includes(otherUser._id)) {
-        alert("User is offline!");
+    // Fix: use .toString() for reliable online status comparison
+    if (!isGroup && otherUser && !onlineUsersList.includes(otherUser._id.toString())) {
+        alert("User is offline. Cannot call.");
         return;
     }
 
@@ -1116,8 +1128,8 @@ async function handleStartCall(type) {
     
     // Show Overlay & Ringing UI
     videoCallOverlay.classList.remove('d-none');
-    ringingUI.classList.remove('d-none');
-    callTimerDisplay.classList.add('d-none');
+    if (ringingUI) ringingUI.classList.remove('d-none');
+    if (callTimerDisplay) callTimerDisplay.classList.add('d-none');
     
     if (isGroup) {
         ringName.innerText = currentChat.chatName;
@@ -1147,7 +1159,7 @@ async function handleStartCall(type) {
 
         if (!isGroup) {
             outgoingRingtone.play().catch(e => console.log("Audio block: ", e));
-            // Send Invitation
+            // Send call invitation (no signalData needed for mesh-based calling)
             socket.emit('callUser', {
                 userToCall: otherUser._id,
                 from: currentUser._id,
@@ -1159,6 +1171,9 @@ async function handleStartCall(type) {
 
         // Join the Unified Call Room
         socket.emit("join-call", currentChat._id);
+        
+        // Show timer after joining
+        if (callTimerDisplay) callTimerDisplay.classList.remove('d-none');
         startTimer();
     } catch (err) {
         console.error("Call initialization error:", err);
@@ -1206,8 +1221,13 @@ acceptCallBtn.addEventListener('click', async () => {
         // Show local preview in grid
         addLocalStream();
 
+        // CRITICAL: Tell the caller we accepted (triggers callAccepted on their end)
+        socket.emit('answerCall', { to: incomingCallData.from, signal: null });
+
         // Join the Unified Call Room
         socket.emit("join-call", incomingCallData.chatId || currentChat._id);
+        
+        if (callTimerDisplay) callTimerDisplay.classList.remove('d-none');
         startTimer();
     } catch (err) {
         console.error("Join call error:", err);
