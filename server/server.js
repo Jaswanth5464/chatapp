@@ -6,7 +6,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
 const { initSocket } = require('./sockets/socket');
 
 // Ensure uploads directory exists
