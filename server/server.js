@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 const { initSocket } = require('./sockets/socket');
 
 // Ensure uploads directory exists
@@ -29,7 +30,7 @@ app.use((req, res, next) => {
     console.log(`${req.method} ${req.url}`);
     next();
 });
-const path = require('path');
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Initialize Socket.io with the HTTP server
