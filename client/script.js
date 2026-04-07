@@ -472,13 +472,15 @@ function renderChats(chats) {
         const div = document.createElement('div');
         div.className = 'user-item p-3 d-flex align-items-center position-relative animate__animated animate__fadeIn';
         if (currentChat && currentChat._id === chat._id) div.classList.add('active');
+        // Store userId for fast online status DOM updates
+        if (!isGroup && otherUser) div.dataset.userId = otherUser._id.toString();
 
         div.innerHTML = `
             <div class="position-relative me-3">
                 <div class="rounded-circle shadow-sm d-flex align-items-center justify-content-center ${isGroup ? 'bg-primary text-white' : ''}" style="width: 48px; height: 48px; overflow: hidden; background: #e2e8f0;">
                     ${isGroup ? '<i class="fa-solid fa-users"></i>' : `<img src="${profilePicUrl}" style="width: 100%; height: 100%; object-fit: cover;">`}
                 </div>
-                ${!isGroup && isOnline ? '<span class="status-dot online position-absolute bottom-0 end-0 border border-white border-2"></span>' : ''}
+                ${!isGroup ? `<span class="status-dot ${isOnline ? 'online' : 'offline'} position-absolute bottom-0 end-0 border border-white border-2"></span>` : ''}
             </div>
             <div class="flex-grow-1 overflow-hidden">
                 <div class="d-flex justify-content-between align-items-center mb-1">
@@ -1068,14 +1070,20 @@ function connectSocket() {
         }
     });
 
-    socket.on('typing', (username) => {
-        typingIndicator.innerText = `${username} is typing...`;
-        typingIndicator.classList.remove('d-none');
+    socket.on('typing', ({ username, room }) => {
+        // Only show if it's from the current active chat room
+        if (!currentChat || currentChat._id !== room) return;
+        if (typingIndicator) {
+            typingIndicator.innerText = `${username} is typing...`;
+            typingIndicator.classList.remove('d-none');
+        }
     });
     
     socket.on('stop typing', () => {
-        typingIndicator.classList.add('d-none');
-        typingIndicator.innerText = 'Typing...';
+        if (typingIndicator) {
+            typingIndicator.classList.add('d-none');
+            typingIndicator.innerText = 'Typing...';
+        }
     });
 
     // --- Mesh Signaling Listeners ---
@@ -1134,11 +1142,34 @@ function connectSocket() {
     
     socket.on('online users', (activeUsersArray) => {
         onlineUsersList = activeUsersArray;
-        // Refresh sidebar to update online/offline indicators
-        fetchChats();
         
-        // Optional: silent re-fetch in background to sync database lastSeen
-        fetchUsersSilently();
+        // FAST PATH: Directly update status dots without a slow API call
+        document.querySelectorAll('.user-item').forEach(item => {
+            const userId = item.dataset.userId;
+            if (!userId) return;
+            const dot = item.querySelector('.status-dot');
+            if (!dot) return;
+            if (activeUsersArray.includes(userId)) {
+                dot.classList.add('online');
+                dot.classList.remove('offline');
+            } else {
+                dot.classList.remove('online');
+                dot.classList.add('offline');
+            }
+        });
+        
+        // Update sidebar title area if viewing a 1:1 chat
+        if (currentChat && !currentChat.isGroupChat) {
+            const other = currentChat.users.find(u => u._id !== currentUser._id);
+            if (other) {
+                const isNowOnline = activeUsersArray.includes(other._id.toString());
+                if (currentChatName) {
+                    // Optionally show online badge next to chat header
+                    const badge = document.getElementById('chat-online-badge');
+                    if (badge) badge.style.display = isNowOnline ? 'inline-block' : 'none';
+                }
+            }
+        }
     });
 
     // WEBRTC SIGNALING
