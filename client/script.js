@@ -7,6 +7,9 @@ let onlineUsersList = [];
 let unreadCounts = {};
 const notificationSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
 let originalTitle = document.title;
+let currentPage = 1;
+const messagesLimit = 30;
+let hasMoreMessages = true;
 
 // DOM Elements
 const authContainer = document.getElementById('auth-view');
@@ -58,15 +61,49 @@ const ringAvatar = document.getElementById('ring-avatar');
 const ringName = document.getElementById('ring-name');
 const ringStatus = document.getElementById('ring-status');
 
+// Group Chat DOM Elements
+const newGroupBtn = document.getElementById('new-group-btn');
+const groupNameInput = document.getElementById('group-name-input');
+const groupUserSearch = document.getElementById('group-user-search');
+const groupUsersList = document.getElementById('group-users-list');
+const selectedUsersBadges = document.getElementById('selected-users-badges');
+const createGroupConfirmBtn = document.getElementById('create-group-confirm');
+
+// Reply DOM Elements
+const replyPreview = document.getElementById('reply-preview');
+const replyUser = document.getElementById('reply-user');
+const replyText = document.getElementById('reply-text');
+const cancelReplyBtn = document.getElementById('cancel-reply');
+
 // WebRTC State
 let localStream = null;
-let peer = null;
+let displayStream = null; // For screen sharing
+let peers = new Map(); // Map of { userId: peerInstance }
 let incomingCallData = null;
 let isMuted = false;
 let isVideoOff = false;
+let isScreenSharing = false;
 let callDurationTimer = null;
 let secondsElapsed = 0;
-let callType = 'video'; // 'voice' or 'video'
+let callType = 'video'; 
+let replyingToMessageId = null; // State for threaded replies
+let selectedGroupUsers = []; 
+
+// DOM for Multi-Video
+const shareScreenBtn = document.getElementById('share-screen-btn');
+const callDurationTimerUI = document.getElementById('call-duration-timer');
+
+// Voice Recording DOM
+const voiceRecBtn = document.getElementById('voice-rec-btn');
+const recordingStatus = document.getElementById('recording-status');
+const recordingTimerUI = document.getElementById('recording-timer');
+const cancelRecordingBtn = document.getElementById('cancel-recording');
+
+let mediaRecorder;
+let audioChunks = [];
+let recordingInterval;
+let recordingSeconds = 0;
+
 const callRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3');
 const outgoingRingtone = new Audio('https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3');
 const callEndSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
@@ -209,6 +246,18 @@ async function fetchUsers() {
     }
 }
 
+async function fetchUsersSilently() {
+    try {
+        const res = await fetch(`${API_URL}/auth/users`, {
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            users = data;
+        }
+    } catch (err) { }
+}
+
 // Time Formatting function for Last Seen
 function timeSince(date) {
     if (!date) return '';
@@ -281,10 +330,8 @@ function renderUsers() {
             accessChat(user._id, user.username);
             
             // Mobile switch to chat
-            if (window.innerWidth <= 768) {
-                sidebar.classList.add('hidden-mobile');
-                mainChat.classList.remove('hidden-mobile');
-            }
+            document.body.classList.add('mobile-chat-active');
+            document.body.classList.remove('mobile-chat-hidden');
         });
         
         usersList.appendChild(div);
@@ -300,8 +347,8 @@ if (userSearchInput) {
 
 // Mobile back button
 backBtn.addEventListener('click', () => {
-    mainChat.classList.add('hidden-mobile');
-    sidebar.classList.remove('hidden-mobile');
+    document.body.classList.add('mobile-chat-hidden');
+    document.body.classList.remove('mobile-chat-active');
     currentChat = null;
 });
 
@@ -333,37 +380,90 @@ async function accessChat(userId, username) {
     }
 }
 
-// Fetch Messages
-async function fetchMessages() {
-    if (!currentChat) return;
+// Fetch Messages (Paginated)
+async function fetchMessages(isLoadMore = false) {
+    if (!currentChat || (!hasMoreMessages && isLoadMore)) return;
     
+    if (!isLoadMore) {
+        currentPage = 1;
+        hasMoreMessages = true;
+        chatMessages.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div></div>';
+    }
+
     try {
-        const res = await fetch(`${API_URL}/chat/${currentChat._id}`, {
+        const res = await fetch(`${API_URL}/chat/${currentChat._id}?page=${currentPage}&limit=${messagesLimit}`, {
             headers: { 'Authorization': `Bearer ${currentUser.token}` }
         });
         const data = await res.json();
         
         if (res.ok) {
-            renderMessages(data);
-            socket.emit("join chat", currentChat._id);
-            socket.emit("mark chat seen", { chatId: currentChat._id, userId: currentUser._id });
+            if (data.length < messagesLimit) hasMoreMessages = false;
             
-            // Smart replies on latest message if not sent by me
-            if (data.length > 0) {
-                const latest = data[data.length - 1];
-                if(latest.sender._id !== currentUser._id) {
-                    generateSmartReplies(latest.content);
-                } else {
-                    smartReplies.classList.add('d-none');
-                }
+            if (isLoadMore) {
+                // Prepend older messages
+                const oldScrollHeight = chatMessages.scrollHeight;
+                const blankState = chatMessages.querySelector('.text-muted.mt-5');
+                if (blankState) blankState.remove();
+                
+                // Remove loading spinner
+                const spinner = chatMessages.querySelector('.spinner-border')?.closest('.text-center');
+                if (spinner) spinner.remove();
+
+                const reverseMsgs = [...data].reverse(); // They come reverse-reverse (chronological)
+                // Wait, server already reverses it. So data is newest last in the batch.
+                // We want to prepend them.
+                data.forEach(msg => {
+                    prependMessageUI(msg);
+                });
+                chatMessages.scrollTop = chatMessages.scrollHeight - oldScrollHeight;
             } else {
-                smartReplies.classList.add('d-none');
+                renderMessages(data);
+                scrollToBottom();
+                socket.emit("join chat", currentChat._id);
+                socket.emit("mark chat seen", { chatId: currentChat._id, userId: currentUser._id });
             }
         }
     } catch (err) {
         console.error('Error fetching msg:', err);
     }
 }
+
+function prependMessageUI(msg) {
+    const isMine = msg.sender._id === currentUser._id;
+    const isDeleted = msg.isDeleted;
+    const div = document.createElement('div');
+    div.className = `message-bubble ${isMine ? 'message-sent' : 'message-received shadow-sm'} ${isDeleted ? 'deleted' : ''}`;
+    if (msg._id) div.id = `msg-${msg._id}`;
+    
+    const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    let mediaHtml = '';
+    if (msg.mediaUrl && !isDeleted) {
+        if (msg.mediaUrl.endsWith('.webm') || msg.mediaUrl.includes('audio')) {
+             mediaHtml = `<div class="voice-note-container p-2 mb-2 rounded bg-light border border-primary border-opacity-10 d-flex align-items-center gap-2" style="max-width: 250px;">
+                            <i class="fa-solid fa-microphone text-primary"></i>
+                            <audio src="${msg.mediaUrl}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
+                        </div>`;
+        } else {
+            mediaHtml = `<img src="${msg.mediaUrl}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+        }
+    }
+
+    const actionsHtml = `<div class="message-actions"><i class="fa-solid fa-reply action-icon" onclick="prepareReply('${msg._id}', '${msg.sender.username}', '${msg.content}')" title="Reply"></i></div>`;
+    const editedTag = msg.isEdited ? `<span class="is-edited-tag">(edited)</span>` : '';
+    
+    div.innerHTML = `${actionsHtml}<span class="msg-text">${msg.content || ''}</span> ${editedTag}<span class="message-meta">${time}</span>`;
+    
+    chatMessages.prepend(div);
+}
+
+// Infinite Scroll Listener
+chatMessages.addEventListener('scroll', () => {
+    if (chatMessages.scrollTop === 0 && hasMoreMessages) {
+        currentPage++;
+        fetchMessages(true);
+    }
+});
 
 function renderMessages(messages) {
     if (!messages || messages.length === 0) {
@@ -408,8 +508,9 @@ function appendMessageUI(msg) {
     }
 
     const isMine = msg.sender._id === currentUser._id;
+    const isDeleted = msg.isDeleted;
     const div = document.createElement('div');
-    div.className = `message-bubble ${isMine ? 'message-sent' : 'message-received shadow-sm'}`;
+    div.className = `message-bubble ${isMine ? 'message-sent' : 'message-received shadow-sm'} ${isDeleted ? 'deleted' : ''}`;
     
     // Add ID so we can update it later
     if (msg._id) div.id = `msg-${msg._id}`;
@@ -417,13 +518,54 @@ function appendMessageUI(msg) {
     const time = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     
     let mediaHtml = '';
-    if (msg.mediaUrl) {
-        mediaHtml = `<img src="${msg.mediaUrl}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+    if (msg.mediaUrl && !isDeleted) {
+        if (msg.mediaUrl.endsWith('.webm') || msg.mediaUrl.includes('audio')) {
+            // It's a voice note
+            mediaHtml = `
+                <div class="voice-note-container p-2 mb-2 rounded bg-light border border-primary border-opacity-10 d-flex align-items-center gap-2" style="max-width: 250px;">
+                    <i class="fa-solid fa-microphone text-primary"></i>
+                    <audio src="${msg.mediaUrl}" controls class="w-100" style="height: 35px; border-radius: 20px;"></audio>
+                </div>
+            `;
+        } else {
+            // It's an image or video
+            mediaHtml = `<img src="${msg.mediaUrl}" class="chat-image mb-2 d-block" onclick="window.open(this.src)" />`;
+        }
     }
+
+    const actionsHtml = (isMine && !isDeleted) ? `
+        <div class="message-actions">
+            <i class="fa-solid fa-reply action-icon" onclick="prepareReply('${msg._id}', '${msg.sender.username}', '${msg.content}')" title="Reply"></i>
+            <i class="fa-solid fa-pen action-icon" onclick="prepareEditMessage('${msg._id}')" title="Edit"></i>
+            <i class="fa-solid fa-trash action-icon delete" onclick="deleteMessageRequest('${msg._id}')" title="Delete for everyone"></i>
+        </div>
+    ` : `
+        <div class="message-actions">
+            <i class="fa-solid fa-reply action-icon" onclick="prepareReply('${msg._id}', '${msg.sender.username}', '${msg.content}')" title="Reply"></i>
+        </div>
+    `;
+
+    const editedTag = msg.isEdited ? `<span class="is-edited-tag">(edited)</span>` : '';
     
+    // Reply UI
+    let replyHtml = '';
+    if (msg.replyTo && !isDeleted) {
+        // Since we don't have the full object here usually, we'd need a snippet.
+        // For now, let's assume content populated if we populated on server.
+        const replyMsg = msg.replyTo;
+        replyHtml = `
+            <div class="reply-snippet p-2 mb-2 rounded bg-dark bg-opacity-10 border-start border-4 border-primary small">
+                <div class="fw-bold text-primary">${replyMsg.sender?.username || 'User'}</div>
+                <div class="text-truncate">${replyMsg.content || 'Media'}</div>
+            </div>
+        `;
+    }
+
     div.innerHTML = `
+        ${actionsHtml}
+        ${replyHtml}
         ${mediaHtml}
-        ${msg.content ? `<span>${msg.content}</span>` : ''}
+        <span class="msg-text">${msg.content ? msg.content : ''}</span> ${editedTag}
         <span class="message-meta">${time} <span class="msg-status" data-id="${msg._id}">${getTickHtml(msg.status || 'sent', isMine)}</span></span>
     `;
     
@@ -491,7 +633,8 @@ messageForm.addEventListener('submit', (e) => {
         content: messageInput.value,
         mediaUrl: "",
         chatId: currentChat,
-        sender: { _id: currentUser._id, username: currentUser.username }
+        sender: { _id: currentUser._id, username: currentUser.username },
+        replyTo: replyingToMessageId // Add reply reference
     };
     
     socket.emit('new message', msgData);
@@ -500,11 +643,24 @@ messageForm.addEventListener('submit', (e) => {
     const optimisticMsg = {
         ...msgData,
         createdAt: new Date().toISOString(),
-         _id: 'temp-' + Date.now()
+        _id: 'temp-' + Date.now()
     };
+    
+    // If replying, we need to populate a minimal replyTo for UI
+    if (replyingToMessageId) {
+        optimisticMsg.replyTo = {
+            sender: { username: replyUser.innerText.replace('Replying to ', '') },
+            content: replyText.innerText
+        };
+    }
+
     appendMessageUI(optimisticMsg);
     
+    // Reset state
     messageInput.value = '';
+    replyingToMessageId = null;
+    replyPreview.classList.add('d-none');
+    
     socket.emit('stop typing', currentChat._id);
     smartReplies.classList.add('d-none');
 });
@@ -514,13 +670,124 @@ let typingTimer;
 messageInput.addEventListener('input', () => {
     if (!currentChat) return;
     
-    socket.emit('typing', currentChat._id);
+    // Pass username for "Named Typing Indicators"
+    socket.emit('typing', { room: currentChat._id, username: currentUser.username });
     
     clearTimeout(typingTimer);
     typingTimer = setTimeout(() => {
         socket.emit('stop typing', currentChat._id);
     }, 3000);
 });
+
+// --- Voice Note Logic ---
+
+voiceRecBtn.onclick = async () => {
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+        startRecording();
+    } else {
+        stopRecording(false); // finish and send
+    }
+};
+
+cancelRecordingBtn.onclick = () => {
+    stopRecording(true); // cancel and delete
+};
+
+async function startRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+            audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            if (mediaRecorder.cancelled) return;
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            uploadVoiceNote(audioBlob);
+        };
+
+        mediaRecorder.start();
+        
+        // UI Update
+        recordingStatus.classList.remove('d-none');
+        voiceRecBtn.innerHTML = '<i class="fa-solid fa-stop text-danger"></i>';
+        voiceRecBtn.classList.add('btn-danger');
+        voiceRecBtn.classList.remove('btn-light');
+        
+        startRecordingTimer();
+    } catch (err) {
+        console.error("Mic access denied:", err);
+        alert("Please allow microphone access to record voice notes.");
+    }
+}
+
+function stopRecording(cancelled) {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.cancelled = cancelled;
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    }
+    
+    // UI Update
+    recordingStatus.classList.add('d-none');
+    voiceRecBtn.innerHTML = '<i class="fa-solid fa-microphone text-primary"></i>';
+    voiceRecBtn.classList.remove('btn-danger');
+    voiceRecBtn.classList.add('btn-light');
+    
+    stopRecordingTimer();
+}
+
+function startRecordingTimer() {
+    recordingSeconds = 0;
+    recordingTimerUI.innerText = "00:00";
+    recordingInterval = setInterval(() => {
+        recordingSeconds++;
+        const mins = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
+        const secs = (recordingSeconds % 60).toString().padStart(2, '0');
+        recordingTimerUI.innerText = `${mins}:${secs}`;
+    }, 1000);
+}
+
+function stopRecordingTimer() {
+    clearInterval(recordingInterval);
+}
+
+async function uploadVoiceNote(blob) {
+    const formData = new FormData();
+    formData.append('media', blob, `voice-note-${Date.now()}.webm`);
+
+    try {
+        const res = await fetch(`${API_URL}/upload`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${currentUser.token}` },
+            body: formData
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            const msgData = {
+                content: "",
+                mediaUrl: data.url,
+                chatId: currentChat,
+                sender: { _id: currentUser._id, username: currentUser.username }
+            };
+            socket.emit('new message', msgData);
+            
+            // Optimistic Update
+            const optimisticMsg = {
+                ...msgData,
+                createdAt: new Date().toISOString(),
+                _id: 'temp-' + Date.now()
+            };
+            appendMessageUI(optimisticMsg);
+        }
+    } catch (err) {
+        console.error("Voice upload failed:", err);
+    }
+}
 
 // Smart Replies
 async function generateSmartReplies(msgContent) {
@@ -559,8 +826,10 @@ async function generateSmartReplies(msgContent) {
 
 // Socket Connection
 function connectSocket() {
-    // Auto-connect to the same host that served the frontend
-    socket = io();
+    // Priority on WebSockets for faster connections on Render
+    socket = io({
+        transports: ['websocket', 'polling']
+    });
     
     socket.emit('setup', currentUser);
     
@@ -601,17 +870,70 @@ function connectSocket() {
         }
     });
 
-    socket.on('typing', () => {
+    socket.on('typing', (username) => {
+        typingIndicator.innerText = `${username} is typing...`;
         typingIndicator.classList.remove('d-none');
     });
     
     socket.on('stop typing', () => {
         typingIndicator.classList.add('d-none');
+        typingIndicator.innerText = 'Typing...';
+    });
+
+    // --- Mesh Signaling Listeners ---
+    socket.on("user-joined-call", ({ socketId, userId }) => {
+        const p = createPeer(socketId, userId, true);
+        peers.set(socketId, p);
+        
+        const participant = users.find(u => u._id === userId);
+        const name = participant ? participant.username : 'User';
+        appendCallLog(`${name} has joined the call`);
+    });
+
+    socket.on("signal-peer-received", ({ signal, fromSocketId, fromUserId }) => {
+        let p = peers.get(fromSocketId);
+        if (!p) {
+            p = createPeer(fromSocketId, fromUserId, false);
+            peers.set(fromSocketId, p);
+        }
+        p.signal(signal);
+    });
+
+    socket.on("user-left-call", (userId) => {
+        const vid = document.getElementById(`video-${userId}`);
+        if (vid) vid.closest('.video-container').remove();
+        
+        const participant = users.find(u => u._id === userId);
+        const name = participant ? participant.username : 'User';
+        appendCallLog(`${name} has left the call`);
+    });
+
+    socket.on("group update received", ({ type, data }) => {
+        if (type === 'rename') {
+            currentChat.chatName = data.newName;
+            currentChatName.innerText = data.newName;
+        } else if (type === 'remove' && data.userId === currentUser._id) {
+            alert("You have been removed from this group.");
+            backBtn.click();
+        }
+        // Refresh users list to update member counts/lists in group info
+        fetchUsersSilently();
+    });
+
+    socket.on('message update recieved', (updatedMsg) => {
+        updateMessageUI(updatedMsg);
     });
     
     socket.on('online users', (activeUsersArray) => {
         onlineUsersList = activeUsersArray;
-        if(users.length > 0) fetchUsers(); // Re-fetch to get updated lastSeen from DB, then render Users
+        // Always render immediately for instant feedback
+        if (users.length > 0) {
+            renderUsers();
+            // Optional: silent re-fetch in background to sync database lastSeen
+            fetchUsersSilently();
+        } else {
+            fetchUsers();
+        }
     });
 
     // WEBRTC SIGNALING
@@ -1082,4 +1404,556 @@ if (emojiBtn && emojiPicker) {
     });
 }
 
+// --- Group Chat Logic ---
+
+if (groupUserSearch) {
+    groupUserSearch.addEventListener('input', () => {
+        renderGroupUserSearch();
+    });
+}
+
+function renderGroupUserSearch() {
+    const term = groupUserSearch.value.toLowerCase().trim();
+    if (!term) {
+        groupUsersList.innerHTML = '<div class="text-center p-3 text-muted small">Search for users to add them...</div>';
+        return;
+    }
+
+    const filtered = users.filter(u => 
+        u._id !== currentUser._id && 
+        u.username.toLowerCase().includes(term) &&
+        !selectedGroupUsers.some(sel => sel._id === u._id)
+    );
+
+    groupUsersList.innerHTML = '';
+    
+    if (filtered.length === 0) {
+        groupUsersList.innerHTML = '<div class="text-center p-3 text-muted small">No users found.</div>';
+    }
+
+    filtered.forEach(user => {
+        const div = document.createElement('div');
+        div.className = 'p-2 border-bottom d-flex align-items-center cursor-pointer hover-bg-light';
+        div.style.cursor = 'pointer';
+        div.innerHTML = `
+            <img src="${user.profilePic || defaultAvatar}" class="rounded-circle me-2" style="width: 30px; height: 30px; object-fit: cover;">
+            <span class="flex-grow-1">${user.username}</span>
+            <i class="fa-solid fa-plus text-primary"></i>
+        `;
+        div.onclick = () => selectUserForGroup(user);
+        groupUsersList.appendChild(div);
+    });
+}
+
+function selectUserForGroup(user) {
+    if (selectedGroupUsers.some(u => u._id === user._id)) return;
+    
+    selectedGroupUsers.push(user);
+    renderSelectedBadges();
+    groupUserSearch.value = '';
+    renderGroupUserSearch();
+}
+
+function renderSelectedBadges() {
+    selectedUsersBadges.innerHTML = '';
+    selectedGroupUsers.forEach(user => {
+        const badge = document.createElement('span');
+        badge.className = 'badge bg-primary rounded-pill d-flex align-items-center p-2 mb-1';
+        badge.innerHTML = `
+            ${user.username}
+            <i class="fa-solid fa-xmark ms-2 cursor-pointer" style="cursor:pointer"></i>
+        `;
+        badge.querySelector('i').onclick = () => {
+            selectedGroupUsers = selectedGroupUsers.filter(u => u._id !== user._id);
+            renderSelectedBadges();
+            renderGroupUserSearch();
+        };
+        selectedUsersBadges.appendChild(badge);
+    });
+}
+
+createGroupConfirmBtn.addEventListener('click', async () => {
+    const name = groupNameInput.value.trim();
+    if (!name || selectedGroupUsers.length < 2) {
+        alert("Please enter a group name and select at least 2 other users.");
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_URL}/chat/group`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentUser.token}`
+            },
+            body: JSON.stringify({
+                name: name,
+                users: JSON.stringify(selectedGroupUsers.map(u => u._id))
+            })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            // Close modal
+            bootstrap.Modal.getInstance(document.getElementById('groupModal')).hide();
+            // Clear state
+            groupNameInput.value = '';
+            selectedGroupUsers = [];
+            renderSelectedBadges();
+            // Open the new chat
+            currentChat = data;
+            currentChatName.innerText = data.chatName;
+            fetchMessages();
+            renderUsers();
+            
+            // Show alert/notification
+            alert("Group created successfully!");
+        } else {
+            alert(data.message || "Failed to create group.");
+        }
+    } catch (err) {
+        console.error(err);
+    }
+});
+
+// --- Message Actions (Edit/Delete) ---
+let editingMessageId = null;
+
+window.prepareEditMessage = (msgId) => {
+    const msgElement = document.getElementById(`msg-${msgId}`);
+    if (!msgElement) return;
+
+    const content = msgElement.querySelector('.msg-text').innerText;
+    messageInput.value = content;
+    messageInput.focus();
+    editingMessageId = msgId;
+    
+    // Change send icon to checkmark
+    sendBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+    sendBtn.classList.add('btn-success');
+};
+
+async function deleteMessageRequest(msgId) {
+    if (!confirm("Are you sure you want to delete this message for everyone?")) return;
+
+    try {
+        const res = await fetch(`${API_URL}/chat/message/${msgId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            updateMessageUI(data.updatedMessage);
+            socket.emit("message update", data.updatedMessage);
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function editMessageRequest(msgId, newContent) {
+    try {
+        const res = await fetch(`${API_URL}/chat/message/${msgId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentUser.token}`
+            },
+            body: JSON.stringify({ content: newContent })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            updateMessageUI(data.updatedMessage);
+            socket.emit("message update", data.updatedMessage);
+            
+            // Revert UI
+            editingMessageId = null;
+            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i>';
+            sendBtn.classList.remove('btn-success');
+            messageInput.value = '';
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+function updateMessageUI(updatedMsg) {
+    const msgElement = document.getElementById(`msg-${updatedMsg._id}`);
+    if (!msgElement) return;
+
+    if (updatedMsg.isDeleted) {
+        msgElement.classList.add('deleted');
+        msgElement.querySelector('.msg-text').innerText = "This message was deleted";
+        const media = msgElement.querySelector('.chat-image');
+        if (media) media.remove();
+        const actions = msgElement.querySelector('.message-actions');
+        if (actions) actions.remove();
+    } else if (updatedMsg.isEdited) {
+        msgElement.querySelector('.msg-text').innerText = updatedMsg.content;
+        if (!msgElement.querySelector('.is-edited-tag')) {
+            const tag = document.createElement('span');
+            tag.className = 'is-edited-tag';
+            tag.innerText = ' (edited)';
+            msgElement.querySelector('.msg-text').appendChild(tag);
+        }
+    }
+}
+
+// Update the message sending logic to handle edits
+messageInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (editingMessageId) {
+            editMessageRequest(editingMessageId, messageInput.value.trim());
+        } else {
+            sendMessage();
+        }
+    }
+});
+
+sendBtn.addEventListener('click', () => {
+    if (editingMessageId) {
+        editMessageRequest(editingMessageId, messageInput.value.trim());
+    } else {
+        sendMessage();
+    }
+});
+
+// Update socket to handle real-time message updates
+// Add this in connectSocket()
+// socket.on("message update", (updatedMsg) => {
+//     updateMessageUI(updatedMsg);
+// });
+
+// --- Group Info & Admin Functions ---
+const groupInfoModal = new bootstrap.Modal(document.getElementById('groupInfoModal'));
+const infoGroupName = document.getElementById('info-group-name');
+const infoGroupAdminName = document.getElementById('info-group-admin-name');
+const groupMembersList = document.getElementById('group-members-list');
+const adminActions = document.getElementById('admin-actions');
+const renameGroupInput = document.getElementById('rename-group-input');
+const renameGroupBtn = document.getElementById('rename-group-btn');
+const leaveGroupBtn = document.getElementById('leave-group-btn');
+
+currentChatName.parentElement.onclick = () => {
+    if (currentChat && currentChat.isGroupChat) {
+        showGroupInfo();
+    }
+};
+
+function showGroupInfo() {
+    infoGroupName.innerText = currentChat.chatName;
+    const admin = currentChat.groupAdmin;
+    infoGroupAdminName.innerText = `Admin: ${admin.username}`;
+    
+    const isAdmin = admin._id === currentUser._id;
+    if (isAdmin) {
+        adminActions.classList.remove('d-none');
+        renameGroupInput.value = currentChat.chatName;
+    } else {
+        adminActions.classList.add('d-none');
+    }
+
+    groupMembersList.innerHTML = '';
+    currentChat.users.forEach(user => {
+        const div = document.createElement('div');
+        div.className = 'p-3 border-bottom d-flex align-items-center';
+        div.innerHTML = `
+            <img src="${user.profilePic || defaultAvatar}" class="rounded-circle me-3" style="width: 40px; height: 40px; object-fit: cover;">
+            <div class="flex-grow-1">
+                <h6 class="mb-0 fw-bold">${user.username} ${user._id === admin._id ? '<span class="badge bg-warning text-dark ms-1" style="font-size: 9px;">Admin</span>' : ''}</h6>
+                <small class="text-muted">${user.email || ''}</small>
+            </div>
+            ${isAdmin && user._id !== currentUser._id ? `<button class="btn btn-sm btn-outline-danger rounded-pill" onclick="removeFromGroupRequest('${user._id}')">Remove</button>` : ''}
+        `;
+        groupMembersList.appendChild(div);
+    });
+
+    groupInfoModal.show();
+}
+
+renameGroupBtn.onclick = async () => {
+    const newName = renameGroupInput.value.trim();
+    if (!newName || newName === currentChat.chatName) return;
+
+    try {
+        const res = await fetch(`${API_URL}/chat/rename`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentUser.token}`
+            },
+            body: JSON.stringify({ chatId: currentChat._id, chatName: newName })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            currentChat = data;
+            currentChatName.innerText = data.chatName;
+            infoGroupName.innerText = data.chatName;
+            renderUsers(); // Refresh sidebar
+            
+            // Broadcast to other members
+            socket.emit("group update", { chatId: currentChat._id, type: 'rename', data: { newName } });
+            
+            alert("Group renamed successfully!");
+        }
+    } catch (err) { }
+};
+
+window.removeFromGroupRequest = async (userId) => {
+    if (!confirm("Remove this user from the group?")) return;
+
+    try {
+        const res = await fetch(`${API_URL}/chat/groupremove`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentUser.token}`
+            },
+            body: JSON.stringify({ chatId: currentChat._id, userId: userId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            currentChat = data;
+            
+            // Broadcast to the removed user (and others)
+            socket.emit("group update", { chatId: currentChat._id, type: 'remove', data: { userId } });
+            
+            showGroupInfo(); // Refresh member list
+            alert("User removed.");
+        }
+    } catch (err) { }
+};
+
+// --- Threaded Reply Logic ---
+window.prepareReply = (msgId, username, text) => {
+    replyingToMessageId = msgId;
+    replyUser.innerText = `Replying to ${username}`;
+    replyText.innerText = text || "Media";
+    replyPreview.classList.remove('d-none');
+    messageInput.focus();
+};
+
+cancelReplyBtn.onclick = () => {
+    replyingToMessageId = null;
+    replyPreview.classList.add('d-none');
+};
+
+// --- Multi-User Video Calling (Mesh) Logic ---
+
+async function startMultiUserCall() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localStream = stream;
+        videoCallOverlay.classList.remove('d-none');
+        addLocalStream();
+
+        // Start Duration Timer
+        startCallDurationTimer();
+
+        // Join the Call Room
+        socket.emit("join-call", currentChat._id);
+    } catch (err) {
+        console.error("Camera access denied:", err);
+        alert("Please allow camera access to start calling.");
+    }
+}
+
+function startCallDurationTimer() {
+    clearInterval(callDurationTimer);
+    secondsElapsed = 0;
+    callDurationTimerUI.innerText = "00:00";
+    callDurationTimer = setInterval(() => {
+        secondsElapsed++;
+        const mins = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
+        const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+        callDurationTimerUI.innerText = `${mins}:${secs}`;
+    }, 1000);
+}
+
+function addLocalStream() {
+    const existing = document.getElementById('local-video-preview');
+    if (existing) existing.remove();
+
+    const container = document.createElement('div');
+    container.id = 'local-video-preview';
+    container.className = 'video-container position-relative';
+    container.innerHTML = `
+        <video id="my-video" autoplay playsinline muted></video>
+        <div class="video-label">You</div>
+    `;
+    videoGrid.appendChild(container);
+    const video = container.querySelector('video');
+    video.srcObject = localStream;
+}
+
+function createPeer(toSocketId, userId, initiator) {
+    // Find username from users list
+    const participant = users.find(u => u._id === userId);
+    const username = participant ? participant.username : 'User';
+
+    const p = new SimplePeer({
+        initiator: initiator,
+        trickle: false,
+        stream: localStream,
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        }
+    });
+
+    p.on('signal', signal => {
+        socket.emit('signal-peer', { toSocketId, signal, fromUserId: currentUser._id });
+    });
+
+    p.on('stream', stream => {
+        addRemoteStream(userId, username, stream);
+    });
+
+    p.on('close', () => {
+        const vid = document.getElementById(`video-${userId}`);
+        if (vid) vid.closest('.video-container').remove();
+        peers.delete(toSocketId);
+    });
+
+    p.on('error', err => console.log('Peer error:', err));
+
+    return p;
+}
+
+function addRemoteStream(userId, username, stream) {
+    let container = document.getElementById(`video-container-${userId}`);
+    if (!container) {
+        container = document.createElement('div');
+        container.id = `video-container-${userId}`;
+        container.className = 'video-container';
+        container.innerHTML = `
+            <video id="video-${userId}" autoplay playsinline></video>
+            <div class="video-label">${username}</div>
+            <div class="video-controls-overlay">
+                 <span class="muted-icon d-none"><i class="fa-solid fa-microphone-slash text-danger"></i></span>
+            </div>
+        `;
+        videoGrid.appendChild(container);
+    }
+    const video = container.querySelector('video');
+    video.srcObject = stream;
+
+    // Speaker Highlighting
+    monitorVolume(stream, container);
+}
+
+function monitorVolume(stream, element) {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    const checkVolume = () => {
+        if (!element.parentElement) return; // Stop if removed
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        let average = sum / dataArray.length;
+
+        if (average > 30) {
+            element.classList.add('active-speaker');
+        } else {
+            element.classList.remove('active-speaker');
+        }
+        requestAnimationFrame(checkVolume);
+    };
+    checkVolume();
+}
+
+function appendCallLog(content) {
+    const msgData = {
+        content: content,
+        isCallLog: true,
+        chatId: currentChat,
+        sender: { _id: currentUser._id, username: currentUser.username }
+    };
+    appendMessageUI(msgData);
+}
+
+// Call Control Handlers
+toggleMicBtn.onclick = () => {
+    isMuted = !isMuted;
+    localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
+    toggleMicBtn.classList.toggle('btn-danger', isMuted);
+    toggleMicBtn.innerHTML = isMuted ? '<i class="fa-solid fa-microphone-slash"></i>' : '<i class="fa-solid fa-microphone"></i>';
+};
+
+toggleVideoBtn.onclick = () => {
+    isVideoOff = !isVideoOff;
+    localStream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+    toggleVideoBtn.classList.toggle('btn-danger', isVideoOff);
+    toggleVideoBtn.innerHTML = isVideoOff ? '<i class="fa-solid fa-video-slash"></i>' : '<i class="fa-solid fa-video"></i>';
+};
+
+shareScreenBtn.onclick = async () => {
+    try {
+        if (!isScreenSharing) {
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            displayStream = stream;
+            
+            // Replace tracks in all peers
+            const videoTrack = stream.getVideoTracks()[0];
+            for (let [socketId, p] of peers) {
+                p.replaceTrack(localStream.getVideoTracks()[0], videoTrack, localStream);
+            }
+            
+            // Update local preview
+            document.getElementById('my-video').srcObject = stream;
+            
+            videoTrack.onended = () => stopScreenSharing();
+            isScreenSharing = true;
+            shareScreenBtn.classList.add('btn-success');
+        } else {
+            stopScreenSharing();
+        }
+    } catch (err) {
+        console.error(err);
+    }
+};
+
+function stopScreenSharing() {
+    const videoTrack = localStream.getVideoTracks()[0];
+    for (let [socketId, p] of peers) {
+        p.replaceTrack(displayStream.getVideoTracks()[0], videoTrack, localStream);
+    }
+    document.getElementById('my-video').srcObject = localStream;
+    displayStream.getTracks().forEach(t => t.stop());
+    isScreenSharing = false;
+    shareScreenBtn.classList.remove('btn-success');
+}
+
+endCallBtn.onclick = () => {
+    socket.emit("leave-call", currentChat._id);
+    peers.forEach(p => p.destroy());
+    peers.clear();
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    if (displayStream) displayStream.getTracks().forEach(t => t.stop());
+    videoGrid.innerHTML = '';
+    videoCallOverlay.classList.add('d-none');
+};
+
+// Update starting call functionality
+videoCallBtn.onclick = () => {
+    if (currentChat.isGroupChat) {
+        startMultiUserCall();
+    } else {
+        // Existing 1-on-1 logic... but let's upgrade it to the new grid too
+        startMultiUserCall();
+    }
+};
+
+// Init logic stays at the end
 init();

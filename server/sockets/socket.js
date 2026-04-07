@@ -83,7 +83,7 @@ const initSocket = (server) => {
         });
 
         // Typing indicators
-        socket.on("typing", (room) => socket.in(room).emit("typing"));
+        socket.on("typing", ({ room, username }) => socket.in(room).emit("typing", username));
         socket.on("stop typing", (room) => socket.in(room).emit("stop typing"));
 
         // New message
@@ -181,6 +181,46 @@ const initSocket = (server) => {
             if (onlineUsers.has(to)) {
                 socket.in(to).emit("callEnded");
             }
+        });
+
+        // --- Multi-User Group Calling (Mesh Signaling) ---
+        socket.on("join-call", (chatId) => {
+            socket.join(`call-${chatId}`);
+            // Notify others in the room that a new user joined
+            socket.to(`call-${chatId}`).emit("user-joined-call", {
+                userId: socket.userId,
+                socketId: socket.id
+            });
+        });
+
+        socket.on("signal-peer", ({ toSocketId, signal, fromUserId }) => {
+            io.to(toSocketId).emit("signal-peer-received", {
+                signal,
+                fromUserId,
+                fromSocketId: socket.id
+            });
+        });
+
+        socket.on("leave-call", (chatId) => {
+            socket.leave(`call-${chatId}`);
+            socket.to(`call-${chatId}`).emit("user-left-call", socket.userId);
+        });
+
+        // Real-time Message Updates (Edit/Delete)
+        socket.on("message update", (updatedMsg) => {
+            const chat = updatedMsg.chatId;
+            if (!chat.users) return;
+
+            chat.users.forEach(user => {
+                if (user._id === updatedMsg.sender._id) return;
+                socket.in(user._id).emit("message update recieved", updatedMsg);
+            });
+        });
+
+        // Group Management Updates
+        socket.on("group update", ({ chatId, type, data }) => {
+            // Broadcast to everyone in the chat room
+            socket.to(chatId).emit("group update received", { type, data });
         });
 
         // Cleanup on disconnect

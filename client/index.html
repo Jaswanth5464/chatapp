@@ -13,7 +13,7 @@
     <!-- Cropper.js CSS -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
 </head>
-<body class="bg-light">
+<body class="bg-light mobile-chat-hidden">
 
     <!-- Auth Container -->
     <div id="auth-view" class="d-flex align-items-center justify-content-center">
@@ -84,7 +84,10 @@
                         <img id="my-profile-pic" src="https://icon-library.com/images/anonymous-avatar-icon/anonymous-avatar-icon-25.jpg" class="rounded-circle me-2 border border-2 border-primary" style="width: 40px; height: 40px; object-fit: cover;" alt="Profile">
                         <h5 class="mb-0 fw-bold" id="my-username">User</h5>
                     </div>
-                    <button id="logout-btn" class="btn btn-sm btn-outline-danger rounded-pill" title="Logout" aria-label="Logout"><i class="fa-solid fa-right-from-bracket"></i></button>
+                    <div id="logout-btn-container">
+                        <button id="new-group-btn" class="btn btn-sm btn-light rounded-circle me-1" title="New Group" data-bs-toggle="modal" data-bs-target="#groupModal" aria-label="New Group"><i class="fa-solid fa-users text-primary"></i></button>
+                        <button id="logout-btn" class="btn btn-sm btn-outline-danger rounded-pill" title="Logout" aria-label="Logout"><i class="fa-solid fa-right-from-bracket"></i></button>
+                    </div>
                 </div>
                 
                 <!-- Search Bar -->
@@ -135,15 +138,39 @@
                         <!-- Emojis injected via JS -->
                     </div>
 
-                    <form id="message-form" class="d-flex align-items-center gap-2">
+                    <div id="reply-preview" class="d-none px-3 py-2 bg-light border-top border-primary border-4 rounded-top-4 animate__animated animate__fadeInUp">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="flex-grow-1 small text-truncate">
+                                <span class="fw-bold text-primary" id="reply-user">Replying to...</span>
+                                <div id="reply-text" class="text-muted">Message content</div>
+                            </div>
+                            <button type="button" class="btn-close small" id="cancel-reply" style="font-size: 0.8rem;"></button>
+                        </div>
+                    </div>
+
+                    <div id="recording-status" class="d-none px-3 py-2 bg-light border-top border-danger border-4 rounded-top-4 animate__animated animate__fadeIn">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="spinner-grow spinner-grow-sm text-danger" role="status"></span>
+                                <span class="fw-bold text-danger">Recording...</span>
+                                <span id="recording-timer" class="badge bg-danger rounded-pill">00:00</span>
+                            </div>
+                            <button type="button" class="btn-close small" id="cancel-recording" aria-label="Cancel Recording"></button>
+                        </div>
+                    </div>
+
+                    <form id="message-form" class="d-flex align-items-center gap-2 p-3">
                         <button type="button" class="btn btn-light rounded-circle" id="emoji-btn" title="Emojis" aria-label="Emojis">
                             <i class="fa-regular fa-face-smile text-muted fa-lg"></i>
                         </button>
-                        <input type="file" id="media-input" class="d-none" accept="image/*,video/*" title="Select media to upload">
+                        <input type="file" id="media-input" class="d-none" accept="image/*,video/*,audio/*" title="Select media to upload">
                         <button type="button" class="btn btn-light rounded-circle" id="attach-btn" title="Attach Media" aria-label="Attach Media">
                             <i class="fa-solid fa-paperclip text-muted fa-lg"></i>
                         </button>
                         <input type="text" class="form-control rounded-pill flex-grow-1 px-3 bg-light border-0" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
+                        <button type="button" class="btn btn-light rounded-circle shadow-sm" id="voice-rec-btn" title="Record Voice Note" aria-label="Record Voice Note" disabled>
+                            <i class="fa-solid fa-microphone text-primary"></i>
+                        </button>
                         <button type="submit" class="btn btn-primary rounded-circle shadow-sm" id="send-btn" title="Send message" aria-label="Send message" disabled>
                             <i class="fa-solid fa-paper-plane"></i>
                         </button>
@@ -154,28 +181,21 @@
         </div>
     </div>
 
-    <!-- Video Call Overlay -->
-    <div id="video-call-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark z-3 d-flex justify-content-center align-items-center flex-column" style="z-index: 1050 !important;">
-        <div id="call-ringing-ui" class="text-center text-white mb-4 d-none">
-            <div class="ringing-avatar-container mb-3">
-                <img id="ring-avatar" src="" class="rounded-circle border border-4 border-primary shadow-lg" style="width: 120px; height: 120px; object-fit: cover;" alt="Caller Profile" title="Caller Profile">
-                <div class="pulse-ring"></div>
-            </div>
-            <h3 id="ring-name" class="fw-bold">Calling...</h3>
-            <p id="ring-status" class="text-light opacity-75">Connecting...</p>
+    <!-- Multi-User Video Call Overlay -->
+    <div id="video-call-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark z-3 d-flex flex-column align-items-center justify-content-center" style="z-index: 1050 !important; background: radial-gradient(circle at center, #1e293b, #0f172a) !important;">
+        <div id="video-grid" class="w-100 h-100 flex-grow-1 d-flex flex-wrap align-items-center justify-content-center p-4">
+            <!-- Videos will be injected here: <div class="video-container">...</div> -->
         </div>
 
-        <video id="remote-video" autoplay playsinline class="w-100 h-100 border-0" style="object-fit: cover;"></video>
-        <video id="local-video" autoplay playsinline muted class="position-absolute bottom-0 end-0 m-4 rounded shadow bg-dark border border-2 border-white" style="width: 150px; height: 200px; object-fit: cover;"></video>
-        
-        <div class="position-absolute top-0 mt-4 text-white text-center w-100">
-            <div id="call-timer" class="fs-4 fw-bold d-none">00:00</div>
+        <div id="call-timer-container" class="position-absolute top-0 mt-4 animate__animated animate__fadeInDown">
+            <span id="call-duration-timer" class="badge bg-light text-dark fs-5 rounded-pill px-4 shadow py-2 fw-bold">00:00</span>
         </div>
 
-        <div class="position-absolute bottom-0 mb-5 d-flex gap-3 align-items-center">
-            <button id="toggle-mic-btn" class="btn btn-light rounded-circle p-3 shadow" title="Mute Mic"><i class="fa-solid fa-microphone"></i></button>
-            <button id="end-call-btn" class="btn btn-danger rounded-circle p-3 shadow-lg mx-2" title="End Call" aria-label="End Call" style="width: 70px; height: 70px;"><i class="fa-solid fa-phone-slash fa-xl"></i></button>
-            <button id="toggle-video-btn" class="btn btn-light rounded-circle p-3 shadow" title="Toggle Video"><i class="fa-solid fa-video"></i></button>
+        <div id="call-controls" class="mb-5 px-4 py-2 bg-dark bg-opacity-25 rounded-pill d-flex gap-3 align-items-center border border-white border-opacity-10 shadow-lg" style="backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
+            <button id="toggle-mic-btn" class="btn btn-light rounded-circle p-3 shadow" title="Mute/Unmute"><i class="fa-solid fa-microphone"></i></button>
+            <button id="toggle-video-btn" class="btn btn-light rounded-circle p-3 shadow" title="Camera ON/OFF"><i class="fa-solid fa-video"></i></button>
+            <button id="share-screen-btn" class="btn btn-light rounded-circle p-3 shadow" title="Share Screen"><i class="fa-solid fa-desktop"></i></button>
+            <button id="end-call-btn" class="btn btn-danger rounded-circle p-3 shadow-lg mx-2" title="End Call" style="width: 70px; height: 70px;"><i class="fa-solid fa-phone-slash fa-xl"></i></button>
         </div>
     </div>
 
@@ -234,6 +254,87 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Group Creation Modal -->
+    <div class="modal fade" id="groupModal" tabindex="-1" aria-labelledby="groupModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 20px;">
+                <div class="modal-header border-0 pb-0 px-4 pt-4">
+                    <h5 class="modal-title fw-bold" id="groupModalLabel">Create New Group</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4">
+                    <div class="mb-4 text-center">
+                        <div class="position-relative d-inline-block">
+                            <div class="bg-light rounded-circle d-flex align-items-center justify-content-center shadow-sm" style="width: 80px; height: 80px;">
+                                <i class="fa-solid fa-camera fa-2x text-muted"></i>
+                            </div>
+                            <button class="btn btn-sm btn-primary rounded-circle position-absolute bottom-0 end-0 p-1" title="Upload Group Photo"><i class="fa-solid fa-plus"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="group-name-input" class="form-label fw-bold small text-uppercase text-muted">Group Name</label>
+                        <input type="text" class="form-control rounded-pill bg-light border-0 py-2 px-3" id="group-name-input" placeholder="e.g. Dream Team">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-uppercase text-muted">Add Members</label>
+                        <input type="text" class="form-control rounded-pill bg-light border-0 py-2 px-3 mb-2" id="group-user-search" placeholder="Search for friends...">
+                        <div id="selected-users-badges" class="d-flex flex-wrap gap-1 mb-2">
+                            <!-- Badges will be injected here -->
+                        </div>
+                        <div id="group-users-list" class="overflow-auto border rounded bg-white" style="max-height: 200px;">
+                            <!-- Users list for selection will be injected here -->
+                            <div class="text-center p-3 text-muted small">Search for users to add them to your group.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 p-4">
+                    <button type="button" class="btn btn-light rounded-pill px-4 fw-bold" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary rounded-pill px-4 fw-bold" id="create-group-confirm">Create Group</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Group Info Modal -->
+    <div class="modal fade" id="groupInfoModal" tabindex="-1" aria-labelledby="groupInfoModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 20px;">
+                <div class="modal-header border-0 pb-0 px-4 pt-4">
+                    <h5 class="modal-title fw-bold" id="groupInfoModalLabel">Group Info</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4">
+                    <div class="text-center mb-4">
+                        <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center mx-auto text-white shadow" style="width: 70px; height: 70px; font-size: 24px;">
+                            <i class="fa-solid fa-users"></i>
+                        </div>
+                        <h4 class="mt-3 fw-bold mb-0" id="info-group-name">Group Name</h4>
+                        <small class="text-muted" id="info-group-admin-name">Admin: ...</small>
+                    </div>
+                    
+                    <div id="admin-actions" class="d-none mb-4 p-3 bg-light rounded-4">
+                        <label class="form-label fw-bold small text-uppercase text-muted">Admin Controls</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control rounded-start-pill border-0 shadow-none ps-3" id="rename-group-input" placeholder="New room name">
+                            <button class="btn btn-primary rounded-end-pill px-3" id="rename-group-btn">Rename</button>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-uppercase text-muted">Members</label>
+                        <div id="group-members-list" class="overflow-auto border rounded bg-white" style="max-height: 250px;">
+                            <!-- Member items injected here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 p-4">
+                    <button type="button" class="btn btn-danger rounded-pill px-4 fw-bold" id="leave-group-btn">Leave Group</button>
+                    <button type="button" class="btn btn-light rounded-pill px-4 fw-bold" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Bootstrap JS & Socket.io & SimplePeer & Cropper.js -->

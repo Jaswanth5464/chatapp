@@ -66,13 +66,22 @@ exports.fetchChats = async (req, res) => {
     }
 };
 
-// Fetch all messages for a specific chat
+// Fetch all messages for a specific chat (with pagination for mobile)
 exports.allMessages = async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 30;
+        const skip = (page - 1) * limit;
+
         const messages = await Message.find({ chatId: req.params.chatId })
             .populate("sender", "username")
-            .populate("chatId");
-        res.json(messages);
+            .populate("chatId")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // Return messages in chronological order for the client
+        res.json(messages.reverse());
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -182,7 +191,123 @@ exports.suggestReply = async (req, res) => {
     }
 };
 
-// Get Basic Analytics for Current User
+// Create Group Chat
+exports.createGroupChat = async (req, res) => {
+    if (!req.body.users || !req.body.name) {
+        return res.status(400).send({ message: "Please fill all fields" });
+    }
+
+    var users = JSON.parse(req.body.users);
+    if (users.length < 2) {
+        return res.status(400).send("More than 2 users are required to form a group chat");
+    }
+
+    users.push(req.user);
+
+    try {
+        const groupChat = await Chat.create({
+            chatName: req.body.name,
+            users: users,
+            isGroupChat: true,
+            groupAdmin: req.user,
+        });
+
+        const fullGroupChat = await Chat.findOne({ _id: groupChat._id })
+            .populate("users", "-password")
+            .populate("groupAdmin", "-password");
+
+        res.status(200).json(fullGroupChat);
+    } catch (error) {
+        res.status(400).send(error.message);
+    }
+};
+
+// Rename Group
+exports.renameGroup = async (req, res) => {
+    const { chatId, chatName } = req.body;
+    const updatedChat = await Chat.findByIdAndUpdate(chatId, { chatName }, { new: true })
+        .populate("users", "-password")
+        .populate("groupAdmin", "-password");
+
+    if (!updatedChat) {
+        res.status(404).send("Chat Not Found");
+    } else {
+        res.json(updatedChat);
+    }
+};
+
+// Add user to Group
+exports.addToGroup = async (req, res) => {
+    const { chatId, userId } = req.body;
+    const added = await Chat.findByIdAndUpdate(chatId, { $push: { users: userId } }, { new: true })
+        .populate("users", "-password")
+        .populate("groupAdmin", "-password");
+
+    if (!added) {
+        res.status(404).send("Chat Not Found");
+    } else {
+        res.json(added);
+    }
+};
+
+// Remove user from Group
+exports.removeFromGroup = async (req, res) => {
+    const { chatId, userId } = req.body;
+    const removed = await Chat.findByIdAndUpdate(chatId, { $pull: { users: userId } }, { new: true })
+        .populate("users", "-password")
+        .populate("groupAdmin", "-password");
+
+    if (!removed) {
+        res.status(404).send("Chat Not Found");
+    } else {
+        res.json(removed);
+    }
+};
+
+// Delete Message
+exports.deleteMessage = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+        
+        // Ensure only sender can delete
+        if (message.sender.toString() !== req.user._id.toString()) {
+            return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        message.content = "This message was deleted";
+        message.mediaUrl = "";
+        message.isDeleted = true;
+        await message.save();
+
+        res.json({ message: "Message deleted successfully", updatedMessage: message });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Edit Message
+exports.editMessage = async (req, res) => {
+    try {
+        const { content } = req.body;
+        const message = await Message.findById(req.params.messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+        
+        if (message.sender.toString() !== req.user._id.toString()) {
+            return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        message.content = content;
+        message.isEdited = true;
+        await message.save();
+
+        res.json({ message: "Message edited successfully", updatedMessage: message });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Analytical Helper
 exports.getUserAnalytics = async (req, res) => {
     try {
         const totalMessagesSent = await Message.countDocuments({ sender: req.user._id });

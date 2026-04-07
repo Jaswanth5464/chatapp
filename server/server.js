@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const compression = require('compression');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
@@ -19,6 +20,7 @@ const chatRoutes = require('./routes/chatRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 
 const app = express();
+app.use(compression());
 const server = http.createServer(app);
 
 // Middleware

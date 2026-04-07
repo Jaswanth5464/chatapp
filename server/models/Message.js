@@ -35,6 +35,18 @@ const messageSchema = new mongoose.Schema({
         type: String,
         enum: ['sent', 'delivered', 'seen'],
         default: 'sent'
+    },
+    isEdited: {
+        type: Boolean,
+        default: false
+    },
+    isDeleted: {
+        type: Boolean,
+        default: false
+    },
+    replyTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Message'
     }
 }, { timestamps: true });
 
