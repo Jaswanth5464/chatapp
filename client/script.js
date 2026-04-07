@@ -354,9 +354,17 @@ function renderChats(chats) {
     }
 
     chats.forEach(chat => {
+        if (!chat || !chat.users) return;
         const isGroup = chat.isGroupChat;
-        const chatTitle = isGroup ? chat.chatName : chat.users.find(u => u._id !== currentUser._id).username;
-        const otherUser = isGroup ? null : chat.users.find(u => u._id !== currentUser._id);
+        
+        // Safety check: ensure currentUser is valid and chat has other users
+        if (!currentUser) return;
+        
+        // Robust finding of the other user in 1:1 chat
+        const otherUser = isGroup ? null : chat.users.find(u => u && u._id && u._id !== currentUser._id);
+        
+        const chatTitle = isGroup ? (chat.chatName || "Group Chat") : (otherUser ? otherUser.username : "Unknown User");
+        
         // Convert _id to string to ensure reliable comparison (ObjectId vs string)
         const isOnline = otherUser ? onlineUsersList.includes(otherUser._id.toString()) : false;
         
@@ -1013,10 +1021,14 @@ function connectSocket() {
     });
 
     socket.on("user-left-call", (userId) => {
+        if (!userId) return;
         const vid = document.getElementById(`video-${userId}`);
-        if (vid) vid.closest('.video-container').remove();
+        const containerId = `video-container-${userId}`;
+        const container = document.getElementById(containerId);
+        if (container) container.remove();
+        else if (vid) vid.closest('.video-container').remove();
         
-        const participant = users.find(u => u._id === userId);
+        const participant = users.find(u => u && u._id === userId);
         const name = participant ? participant.username : 'User';
         appendCallLog(`${name} has left the call`);
     });
@@ -1056,12 +1068,11 @@ function connectSocket() {
         });
         
         // Update sidebar title area if viewing a 1:1 chat
-        if (currentChat && !currentChat.isGroupChat) {
-            const other = currentChat.users.find(u => u._id !== currentUser._id);
+        if (currentChat && !currentChat.isGroupChat && currentUser) {
+            const other = currentChat.users.find(u => u && u._id !== currentUser._id);
             if (other) {
                 const isNowOnline = activeUsersArray.includes(other._id.toString());
                 if (currentChatName) {
-                    // Optionally show online badge next to chat header
                     const badge = document.getElementById('chat-online-badge');
                     if (badge) badge.style.display = isNowOnline ? 'inline-block' : 'none';
                 }
@@ -1098,10 +1109,10 @@ function connectSocket() {
 
 // UNIFIED WEBRTC ACTIONS (Standard & Group use the same Mesh Grid)
 async function handleStartCall(type) {
-    if (!currentChat) return;
+    if (!currentChat || !currentUser) return;
     
     const isGroup = currentChat.isGroupChat;
-    const otherUser = isGroup ? null : currentChat.users.find(u => u._id !== currentUser._id);
+    const otherUser = isGroup ? null : currentChat.users.find(u => u && u._id && u._id !== currentUser._id);
     
     // Fix: use .toString() for reliable online status comparison
     if (!isGroup && otherUser && !onlineUsersList.includes(otherUser._id.toString())) {
@@ -1111,7 +1122,7 @@ async function handleStartCall(type) {
 
     callType = type;
     isCallInitiator = true;
-    activeCallUserId = isGroup ? null : otherUser._id;
+    activeCallUserId = isGroup ? null : (otherUser ? otherUser._id : null);
     isMuted = false;
     isVideoOff = false;
     
@@ -1121,13 +1132,13 @@ async function handleStartCall(type) {
     if (callTimerDisplay) callTimerDisplay.classList.add('d-none');
     
     if (isGroup) {
-        ringName.innerText = currentChat.chatName;
-        ringStatus.innerText = "Starting Group Call...";
-        ringAvatar.src = defaultAvatar; // Or group icon
+        if (ringName) ringName.innerText = currentChat.chatName || "Group Call";
+        if (ringStatus) ringStatus.innerText = "Starting Group Call...";
+        if (ringAvatar) ringAvatar.src = defaultAvatar; 
     } else {
-        if (ringName) ringName.innerText = otherUser.username;
+        if (ringName && otherUser) ringName.innerText = otherUser.username;
         if (ringStatus) ringStatus.innerText = "Ringing...";
-        if (ringAvatar) {
+        if (ringAvatar && otherUser) {
             ringAvatar.src = getSafeUrl(otherUser.profilePic);
         }
     }
@@ -1141,12 +1152,15 @@ async function handleStartCall(type) {
                 autoGainControl: true 
             } 
         };
+        console.log("🎥 Getting User Media with constraints:", streamConstraints);
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
+        console.log("✅ Local Stream acquired:", localStream.id, "Tracks:", localStream.getTracks().map(t => `${t.kind}:${t.enabled}`));
         
         // Show local preview in grid
         addLocalStream();
 
         if (!isGroup) {
+            console.log("☎️ Calling user:", otherUser._id);
             outgoingRingtone.play().catch(e => console.log("Audio block: ", e));
             // Send call invitation (no signalData needed for mesh-based calling)
             socket.emit('callUser', {
@@ -1205,7 +1219,9 @@ acceptCallBtn.addEventListener('click', async () => {
                 autoGainControl: true 
             } 
         };
+        console.log("🎥 Responder: Getting User Media with constraints:", streamConstraints);
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
+        console.log("✅ Responder: Local Stream acquired:", localStream.id, "Tracks:", localStream.getTracks().map(t => `${t.kind}:${t.enabled}`));
         
         // Show local preview in grid
         addLocalStream();
@@ -1815,7 +1831,13 @@ async function startMultiUserCall() {
      handleStartCall('video');
 }
 
+let sharedAudioContext = null;
+
 function addLocalStream() {
+    if (!localStream) {
+        console.warn("⚠️ No local stream available to add");
+        return;
+    }
     const existing = document.getElementById('local-video-preview');
     if (existing) existing.remove();
 
@@ -1829,6 +1851,11 @@ function addLocalStream() {
     videoGrid.appendChild(container);
     const video = container.querySelector('video');
     video.srcObject = localStream;
+    
+    // Explicitly play to ensure it shows immediately
+    video.onloadedmetadata = () => {
+        video.play().catch(e => console.warn("Local play failed:", e));
+    };
     
     // Auto-hide ringing UI when stream added to grid
     ringingUI.classList.add('d-none');
@@ -1846,33 +1873,49 @@ function createPeer(toSocketId, userId, initiator) {
         config: {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
             ]
         }
     });
 
     p.on('signal', signal => {
+        console.log(`📡 Signaling to ${username} (${toSocketId})`);
         socket.emit('signal-peer', { toSocketId, signal, fromUserId: currentUser._id });
     });
 
     p.on('stream', stream => {
+        console.log(`✅ Received remote stream from ${username}`);
         addRemoteStream(userId, username, stream);
         // Ensure ring is hidden when we get a remote participant
-        ringingUI.classList.add('d-none');
+        if (ringingUI) ringingUI.classList.add('d-none');
+    });
+
+    p.on('connect', () => {
+        console.log(`🤝 Peer connected with ${username}`);
     });
 
     p.on('close', () => {
+        console.log(`❕ Peer connection with ${username} closed`);
         const vid = document.getElementById(`video-${userId}`);
-        if (vid) vid.closest('.video-container').remove();
+        const containerId = `video-container-${userId}`;
+        const container = document.getElementById(containerId);
+        if (container) container.remove();
+        else if (vid) vid.closest('.video-container').remove();
         peers.delete(toSocketId);
     });
 
-    p.on('error', err => console.log('Peer error:', err));
+    p.on('error', err => {
+        console.warn(`❌ Peer error (${username}):`, err.message || err);
+    });
 
     return p;
 }
 
 function addRemoteStream(userId, username, stream) {
+    console.log(`🎬 Attaching remote stream from ${username} (${userId}). Tracks:`, stream.getTracks().map(t => `${t.kind}:${t.enabled}`));
     let container = document.getElementById(`video-container-${userId}`);
     if (!container) {
         container = document.createElement('div');
@@ -1889,13 +1932,20 @@ function addRemoteStream(userId, username, stream) {
     }
     const video = container.querySelector('video');
     video.srcObject = stream;
+    
+    video.onloadedmetadata = () => {
+        video.play().catch(e => console.warn("Remote play failed:", e));
+    };
 
     // Speaker Highlighting
     monitorVolume(stream, container);
 }
 
 function monitorVolume(stream, element) {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (!sharedAudioContext) {
+        sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const audioContext = sharedAudioContext;
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 512;
