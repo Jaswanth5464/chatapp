@@ -974,7 +974,11 @@ function connectSocket() {
         }
     });
 
-    socket.on('typing', ({ username, room }) => {
+    socket.on('typing', (data) => {
+        // Handle both older string-only and newer object-based typing indicators
+        const username = typeof data === 'object' ? data.username : data;
+        const room = typeof data === 'object' ? data.room : arguments[1]; // fallback for legacy emitters
+
         // Only show if it's from the current active chat room
         if (!currentChat || currentChat._id !== room) return;
         if (typingIndicator) {
@@ -1906,11 +1910,12 @@ function createPeer(toSocketId, userId, initiator) {
         }
     });
 
-    // If localStream wasn't ready in constructor but is now, add it
-    if (!p.stream && localStream) {
-        console.log(`📤 Manually adding localStream to peer for ${username}`);
-        p.addStream(localStream);
-    }
+    // The stream is already attached via the constructor above.
+    // Manual addStream is not needed if localStream was provided during init.
+    // if (!p.stream && localStream) {
+    //     console.log(`📤 Manually adding localStream to peer for ${username}`);
+    //     p.addStream(localStream);
+    // }
     
     // Debug underlying RTCPeerConnection tracks
     if (p._pc) {
