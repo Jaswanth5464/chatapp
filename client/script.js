@@ -950,7 +950,11 @@ function connectSocket() {
     
     socket = io(socketOptions);
     
-    socket.emit('setup', currentUser);
+    // CRITICAL: emit 'setup' AFTER connection is confirmed, not before.
+    // Also re-emit on reconnect so status stays correct after network drops.
+    socket.on('connect', () => {
+        socket.emit('setup', currentUser);
+    });
     
     socket.on('connected', () => {
         console.log('✅ Connected to Server');
