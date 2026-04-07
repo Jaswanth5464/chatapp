@@ -80,15 +80,18 @@ const cancelReplyBtn = document.getElementById('cancel-reply');
 // WebRTC State
 let localStream = null;
 let displayStream = null; // For screen sharing
-let peers = new Map(); // Map of { userId: peerInstance }
+let peers = new Map(); // Map of { socketId: peerInstance }
+let peer = null; // For 1:1 fallback
 let incomingCallData = null;
 let isMuted = false;
 let isVideoOff = false;
 let isScreenSharing = false;
 let callDurationTimer = null;
 let secondsElapsed = 0;
-let callType = 'video'; 
-let replyingToMessageId = null; // State for threaded replies
+let callType = 'video';
+let isCallInitiator = false;
+let activeCallUserId = null;
+let replyingToMessageId = null;
 let selectedGroupUsers = []; 
 
 // DOM for Multi-Video
@@ -134,6 +137,60 @@ function getSafeUrl(url) {
 
 function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Call Timer
+function startTimer() {
+    clearInterval(callDurationTimer);
+    secondsElapsed = 0;
+    if (callTimerDisplay) {
+        callTimerDisplay.classList.remove('d-none');
+        callTimerDisplay.innerText = '00:00';
+    }
+    callDurationTimer = setInterval(() => {
+        secondsElapsed++;
+        const mins = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
+        const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+        if (callTimerDisplay) callTimerDisplay.innerText = `${mins}:${secs}`;
+    }, 1000);
+}
+
+// Send Message function (called by send button and form submit)
+function sendMessage(mediaUrl = null) {
+    const content = messageInput ? messageInput.value.trim() : '';
+    if (!mediaUrl && (!content || !currentChat)) return;
+    if (!currentChat) return;
+
+    const msgData = {
+        content: mediaUrl ? '' : content,
+        mediaUrl: mediaUrl || '',
+        chatId: currentChat,
+        sender: { _id: currentUser._id, username: currentUser.username },
+        replyTo: replyingToMessageId
+    };
+
+    socket.emit('new message', msgData);
+
+    const optimisticMsg = {
+        ...msgData,
+        createdAt: new Date().toISOString(),
+        _id: 'temp-' + Date.now()
+    };
+
+    if (replyingToMessageId && replyUser && replyText) {
+        optimisticMsg.replyTo = {
+            sender: { username: replyUser.innerText.replace('Replying to ', '') },
+            content: replyText.innerText
+        };
+    }
+
+    appendMessageUI(optimisticMsg);
+
+    if (messageInput) messageInput.value = '';
+    replyingToMessageId = null;
+    if (replyPreview) replyPreview.classList.add('d-none');
+    if (smartReplies) smartReplies.classList.add('d-none');
+    if (currentChat) socket.emit('stop typing', currentChat._id);
 }
 
 // Initialize app
