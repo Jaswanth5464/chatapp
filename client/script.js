@@ -144,6 +144,20 @@ function showChatView() {
     }
 }
 
+async function fetchUsersSilently() {
+    try {
+        const res = await fetch(`${API_URL}/auth/users`, {
+            headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            users = data;
+            // No full renderChats() here to avoid flicker; 
+            // The online status is synced via onlineUsersList socket event
+        }
+    } catch (err) { }
+}
+
 // Sidebar Restoration: Show both Users and Groups
 async function fetchUsers() {
     try {
@@ -929,8 +943,8 @@ function connectSocket() {
             // Update Title
             document.title = `(${unreadCounts[senderId]}) New Message - Chat App`;
             
-            // Re-render user list to show badge
-            renderUsers();
+            // Re-fetch conversation list to show badge & snippet
+            fetchChats();
         } else {
             appendMessageUI(newMessageReceived);
             generateSmartReplies(newMessageReceived.content);
@@ -1006,14 +1020,11 @@ function connectSocket() {
     
     socket.on('online users', (activeUsersArray) => {
         onlineUsersList = activeUsersArray;
-        // Always render immediately for instant feedback
-        if (users.length > 0) {
-            renderUsers();
-            // Optional: silent re-fetch in background to sync database lastSeen
-            fetchUsersSilently();
-        } else {
-            fetchUsers();
-        }
+        // Refresh sidebar to update online/offline indicators
+        fetchChats();
+        
+        // Optional: silent re-fetch in background to sync database lastSeen
+        fetchUsersSilently();
     });
 
     // WEBRTC SIGNALING
@@ -1158,24 +1169,21 @@ cancelRecordingBtn.addEventListener('click', () => {
     }
 });
 
-// WEBRTC ACTIONS (Standard and Mesh)
+// UNIFIED WEBRTC ACTIONS (Standard & Group use the same Mesh Grid)
 async function handleStartCall(type) {
     if (!currentChat) return;
     
-    if (currentChat.isGroupChat) {
-        startMultiUserCall();
-        return;
-    }
-
-    const otherUser = currentChat.users.find(u => u._id !== currentUser._id);
-    if (!onlineUsersList.includes(otherUser._id)) {
+    const isGroup = currentChat.isGroupChat;
+    const otherUser = isGroup ? null : currentChat.users.find(u => u._id !== currentUser._id);
+    
+    if (!isGroup && otherUser && !onlineUsersList.includes(otherUser._id)) {
         alert("User is offline!");
         return;
     }
 
     callType = type;
     isCallInitiator = true;
-    activeCallUserId = otherUser._id;
+    activeCallUserId = isGroup ? null : otherUser._id;
     isMuted = false;
     isVideoOff = false;
     
@@ -1183,47 +1191,43 @@ async function handleStartCall(type) {
     videoCallOverlay.classList.remove('d-none');
     ringingUI.classList.remove('d-none');
     callTimerDisplay.classList.add('d-none');
-    ringName.innerText = otherUser.username;
-    ringStatus.innerText = "Ringing...";
-    ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
+    
+    if (isGroup) {
+        ringName.innerText = currentChat.chatName;
+        ringStatus.innerText = "Starting Group Call...";
+        ringAvatar.src = defaultAvatar; // Or group icon
+    } else {
+        ringName.innerText = otherUser.username;
+        ringStatus.innerText = "Ringing...";
+        ringAvatar.src = otherUser.profilePic ? (otherUser.profilePic.startsWith('http') ? otherUser.profilePic : `uploads/${otherUser.profilePic.split('/').pop()}`) : defaultAvatar;
+    }
     
     try {
         const streamConstraints = { video: type === 'video', audio: true };
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
-        if (type === 'video') {
-             // In 1:1, we use manual localVideo/remoteVideo
-             // But let's use the grid for consistency
-             addLocalStream(localStream);
-        }
+        
+        // Show local preview in grid
+        addLocalStream();
 
-        outgoingRingtone.play().catch(e => console.log("Outgoing audio block: ", e));
-
-        peer = new SimplePeer({
-            initiator: true,
-            trickle: false,
-            stream: localStream,
-            config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
-        });
-
-        peer.on('signal', data => {
+        if (!isGroup) {
+            outgoingRingtone.play().catch(e => console.log("Audio block: ", e));
+            // Send Invitation
             socket.emit('callUser', {
                 userToCall: otherUser._id,
-                signalData: data,
                 from: currentUser._id,
                 name: currentUser.username,
-                type: type
+                type: type,
+                chatId: currentChat._id
             });
-        });
+        }
 
-        peer.on('stream', stream => {
-             addRemoteStream(otherUser._id, otherUser.username, stream);
-             ringingUI.classList.add('d-none');
-             startTimer();
-        });
+        // Join the Unified Call Room
+        socket.emit("join-call", currentChat._id);
+        startTimer();
     } catch (err) {
         console.error("Call initialization error:", err);
         alert("Could not access camera/mic.");
-        endCall('Permission Denied');
+        endCall();
     }
 }
 
@@ -1242,124 +1246,93 @@ acceptCallBtn.addEventListener('click', async () => {
     isMuted = false;
     isVideoOff = false;
 
-    // Show Ringing/Connecting UI
+    // Show Connecting UI
     ringingUI.classList.remove('d-none');
     ringName.innerText = incomingCallData.name;
     ringStatus.innerText = "Connecting...";
-    // Find sender profile pic
     const sender = users.find(u=>u._id === activeCallUserId);
     ringAvatar.src = sender ? (sender.profilePic || defaultAvatar) : defaultAvatar;
 
-    if (callType === 'voice') {
-        localVideo.classList.add('d-none');
-        remoteVideo.classList.add('d-none');
-        toggleVideoBtn.classList.add('d-none');
-    } else {
-        localVideo.classList.remove('d-none');
-        remoteVideo.classList.add('d-none');
-        toggleVideoBtn.classList.remove('d-none');
-    }
-
     try {
-        const streamConstraints = { 
-            video: callType === 'video', 
-            audio: true 
-        };
+        const streamConstraints = { video: callType === 'video', audio: true };
         localStream = await navigator.mediaDevices.getUserMedia(streamConstraints);
-        if (callType === 'video') localVideo.srcObject = localStream;
+        
+        // Show local preview in grid
+        addLocalStream();
 
-        peer = new SimplePeer({
-            initiator: false,
-            trickle: false,
-            stream: localStream,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                ]
-            }
-        });
-
-        peer.on('signal', data => {
-            socket.emit('answerCall', { signal: data, to: incomingCallData.from });
-        });
-
-        peer.on('stream', stream => {
-            remoteVideo.srcObject = stream;
-            if (callType === 'video') {
-                remoteVideo.classList.remove('d-none');
-                ringingUI.classList.add('d-none');
-            } else {
-                ringStatus.innerText = "In call";
-            }
-        });
-
-        peer.signal(incomingCallData.signal);
+        // Join the Unified Call Room
+        socket.emit("join-call", incomingCallData.chatId || currentChat._id);
         startTimer();
     } catch (err) {
-        console.error("Camera error:", err);
-        socket.emit('endCall', { to: incomingCallData.from });
-        endCall('Missing Permissions');
+        console.error("Join call error:", err);
+        endCall();
     }
 });
 
 function endCall(reason) {
-    videoCallOverlay.classList.add('d-none');
-    incomingCallModal.classList.add('d-none');
-    callRingtone.pause();
-    callRingtone.currentTime = 0;
-    outgoingRingtone.pause();
-    outgoingRingtone.currentTime = 0;
-    clearInterval(callDurationTimer);
+    console.log("Call Ended:", reason);
     
-    if (peer || localStream) {
-        callEndSound.play().catch(e=>null);
-    }
-
-    // Log the call if initiator OR if it was an active call
-    if (activeCallUserId && currentChat) {
-        let durationStr = "Missed Call";
-        let durationSec = secondsElapsed;
-        
-        if (durationSec > 0) {
-            const m = Math.floor(durationSec / 60);
-            const s = durationSec % 60;
-            durationStr = `${m}m ${s}s`;
-        } else if (reason === 'Remote ended' && isCallInitiator) {
-             durationStr = "Declined";
-        }
-        
-        const logMsg = {
-            content: `📞 ${callType === 'video' ? 'Video' : 'Voice'} Call - ${durationStr}`,
-            chatId: currentChat,
-            sender: currentUser,
-            isCallLog: true,
-            callDuration: durationSec
-        };
-        
-        // Only log if I'm the initiator (to avoid double logs)
-        if (isCallInitiator) {
-            socket.emit('new message', logMsg);
-            const optimisticMsg = { ...logMsg, createdAt: new Date().toISOString(), _id: 'temp-' + Date.now() };
-            appendMessageUI(optimisticMsg);
-        }
-    }
-
-    if (peer) {
-        peer.destroy();
-        peer = null;
-    }
+    // Stop all media
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
+    if (displayStream) {
+        displayStream.getTracks().forEach(track => track.stop());
+        displayStream = null;
+    }
     
-    // Reset UI states
+    // Destroy all Mesh peers
+    peers.forEach(p => p.destroy());
+    peers.clear();
+    
+    // Clear Individual peer if exists
+    if (peer) {
+        peer.destroy();
+        peer = null;
+    }
+
+    // Notify server to leave call room
+    if (currentChat) socket.emit("leave-call", currentChat._id);
+    
+    // UI Cleanup
+    videoCallOverlay.classList.add('d-none');
+    incomingCallModal.classList.add('d-none');
+    videoGrid.innerHTML = ''; // Wipe the grid
+    
+    // Audio Cleanup
+    callRingtone.pause();
+    callRingtone.currentTime = 0;
+    outgoingRingtone.pause();
+    outgoingRingtone.currentTime = 0;
+    
+    if (reason !== 'I rejected' && reason !== 'Remote ended') {
+        callEndSound.play().catch(e=>null);
+    }
+
+    // Log the call if initiator
+    if (isCallInitiator && activeCallUserId && currentChat) {
+        let durationStr = secondsElapsed > 0 ? `${Math.floor(secondsElapsed / 60)}m ${secondsElapsed % 60}s` : "No Answer";
+        
+        const logMsg = {
+            content: `📞 ${callType === 'video' ? 'Video' : 'Voice'} Call - ${durationStr}`,
+            chatId: currentChat._id,
+            sender: currentUser,
+            isCallLog: true,
+            callDuration: secondsElapsed
+        };
+        
+        socket.emit('new message', logMsg);
+        appendMessageUI({ ...logMsg, createdAt: new Date().toISOString(), _id: 'temp-' + Date.now() });
+    }
+
+    // Reset states
     incomingCallData = null;
-    isCallInitiator = false;
     activeCallUserId = null;
+    isCallInitiator = false;
     secondsElapsed = 0;
+    clearInterval(callDurationTimer);
+    
     toggleMicBtn.classList.remove('active');
     toggleMicBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
     toggleVideoBtn.classList.remove('active');
@@ -1637,7 +1610,7 @@ createGroupConfirmBtn.addEventListener('click', async () => {
             currentChat = data;
             currentChatName.innerText = data.chatName;
             fetchMessages();
-            renderUsers();
+            fetchChats(); // Refresh sidebar for new group
             
             // Show alert/notification
             alert("Group created successfully!");
@@ -1825,7 +1798,7 @@ renameGroupBtn.onclick = async () => {
             currentChat = data;
             currentChatName.innerText = data.chatName;
             infoGroupName.innerText = data.chatName;
-            renderUsers(); // Refresh sidebar
+            fetchChats(); // Refresh sidebar for rename
             
             // Broadcast to other members
             socket.emit("group update", { chatId: currentChat._id, type: 'rename', data: { newName } });
@@ -1906,13 +1879,20 @@ function startCallDurationTimer() {
     }, 1000);
 }
 
+// UNIFIED START LOGIC
+async function startMultiUserCall() {
+     // Now just a wrapper for handleStartCall('video') 
+     // or shared unified logic
+     handleStartCall('video');
+}
+
 function addLocalStream() {
     const existing = document.getElementById('local-video-preview');
     if (existing) existing.remove();
 
     const container = document.createElement('div');
     container.id = 'local-video-preview';
-    container.className = 'video-container position-relative';
+    container.className = 'video-container position-relative animate__animated animate__zoomIn';
     container.innerHTML = `
         <video id="my-video" autoplay playsinline muted></video>
         <div class="video-label">You</div>
@@ -1920,6 +1900,9 @@ function addLocalStream() {
     videoGrid.appendChild(container);
     const video = container.querySelector('video');
     video.srcObject = localStream;
+    
+    // Auto-hide ringing UI when stream added to grid
+    ringingUI.classList.add('d-none');
 }
 
 function createPeer(toSocketId, userId, initiator) {
@@ -1945,6 +1928,8 @@ function createPeer(toSocketId, userId, initiator) {
 
     p.on('stream', stream => {
         addRemoteStream(userId, username, stream);
+        // Ensure ring is hidden when we get a remote participant
+        ringingUI.classList.add('d-none');
     });
 
     p.on('close', () => {
