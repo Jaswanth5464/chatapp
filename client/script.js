@@ -993,21 +993,30 @@ function connectSocket() {
 
     // --- Mesh Signaling Listeners ---
     socket.on("user-joined-call", ({ socketId, userId }) => {
+        console.log(`👤 New participant joined: ${userId} (${socketId})`);
+        
         // Stop outgoing ringtone once a peer joins
         outgoingRingtone.pause();
         outgoingRingtone.currentTime = 0;
 
+        // PREVENTION: If we already have a peer for this socket, don't recreate
+        if (peers.has(socketId)) {
+            console.log(`❕ Peer already exists for socket ${socketId}, skipping...`);
+            return;
+        }
+
         const p = createPeer(socketId, userId, true);
         peers.set(socketId, p);
         
-        const participant = users.find(u => u._id === userId);
+        const participant = users.find(u => u && u._id === userId);
         const name = participant ? participant.username : 'User';
         appendCallLog(`${name} has joined the call`);
     });
 
     socket.on("signal-peer-received", ({ signal, fromSocketId, fromUserId }) => {
         console.log(`📡 Inbound [${signal.type || 'candidate'}] signal from socket: ${fromSocketId} (User: ${fromUserId})`);
-        // Stop all ringtones as we are receiving signaling
+        
+        // Stop all ringtones
         outgoingRingtone.pause();
         outgoingRingtone.currentTime = 0;
         callRingtone.pause();
@@ -1015,10 +1024,14 @@ function connectSocket() {
 
         let p = peers.get(fromSocketId);
         if (!p) {
+            console.log(`🆕 Creating responder peer for ${fromUserId}`);
             p = createPeer(fromSocketId, fromUserId, false);
             peers.set(fromSocketId, p);
         }
-        p.signal(signal);
+        
+        if (p) {
+            p.signal(signal);
+        }
     });
 
     socket.on("user-left-call", (userId) => {
@@ -1873,13 +1886,15 @@ function addLocalStream() {
 
 function createPeer(toSocketId, userId, initiator) {
     // Find username from users list
-    const participant = users.find(u => u._id === userId);
+    const participant = users.find(u => u && u._id === userId);
     const username = participant ? participant.username : 'User';
+
+    console.log(`🏗️ Creating Peer: Initiator=${initiator}, To=${username}`);
 
     const p = new SimplePeer({
         initiator: initiator,
-        trickle: false,
-        stream: localStream,
+        trickle: true,
+        stream: localStream || undefined,
         config: {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -1890,6 +1905,19 @@ function createPeer(toSocketId, userId, initiator) {
             ]
         }
     });
+
+    // If localStream wasn't ready in constructor but is now, add it
+    if (!p.stream && localStream) {
+        console.log(`📤 Manually adding localStream to peer for ${username}`);
+        p.addStream(localStream);
+    }
+    
+    // Debug underlying RTCPeerConnection tracks
+    if (p._pc) {
+        p._pc.ontrack = (e) => {
+            console.log(`🛤️ Track event detected for ${username}:`, e.track.kind, e.track.id);
+        };
+    }
 
     p.on('signal', signal => {
         console.log(`📡 Sending [${signal.type || 'candidate'}] signal to ${username} (${toSocketId})`);
